@@ -67,7 +67,7 @@ function handleEvent(event) {
     else replyToLine(replyToken, '訊息紀錄目前只有 ' + Math.max(0, last - 1) + ' 則，不需要清理。');
     return;
   }
-  if (text === '#版本') { replyToLine(replyToken, '✅ 卡比集機器人 v2.56\n本次合併修復：\n【鐵架】分隔符全支援、客戶名收、不超收；名稱含「鐵」即可(右昌藍橘鐵等)；收回容錯比對(查得到就收得到)\n【寄運】「寄旭陽（修清）」物流/備註分離；📍備註行尾「取消」不再誤刪整筆客戶\n【速度】寫入鎖縮5秒、搶不到回「系統忙碌」；查詢不上鎖\n你看到這行＝最新程式已生效。'); return; }
+  if (text === '#版本') { replyToLine(replyToken, '✅ 卡比集機器人 v2.57\n本次修復：\n【P0冰庫】冰庫查詢結果貼回不再被誤判成「鐵架格式錯誤」；無「鐵」的品項/庫存內容不進鐵架\n【鐵架】分隔符全支援、客戶名收、不超收；名稱含「鐵」即可；收回容錯比對\n【寄運】「寄旭陽（修清）」物流/備註分離；📍備註行尾「取消」不再誤刪整筆\n【速度】寫入鎖縮5秒、查詢不上鎖\n你看到這行＝最新程式已生效。'); return; }
   if (text === '#設定工作群組') { addWorkGroup(chatId); replyToLine(replyToken, '✅ 已把「這個群組」設為工作群組。\n目前工作群組數：' + getWorkGroups().length); return; }
   if (text === '#取消工作群組') { removeWorkGroup(chatId); replyToLine(replyToken, '已把這個群組移出工作群組。\n目前工作群組數：' + getWorkGroups().length); return; }
   // ★ 群組權限設定（老闆限定）
@@ -127,6 +127,11 @@ function handleEvent(event) {
   // 管理群組內：明顯閒聊且非合法指令 → 不觸發任何功能
   if (looksLikeChat(text) && !parseCommand(text)) { return; }
 
+  // ★ 冰庫查詢結果被貼回來:不寫入、不解析(避免被鐵架/其他 parser 誤判) — P0
+  if (/^\s*❄/.test(text) || (/冰庫庫存/.test(text) && /【/.test(text))) {
+    if (!quiet()) replyToLine(replyToken, '⚠️ 此為冰庫查詢結果，不會寫入資料。');
+    return;
+  }
   // ★ 寄運查詢結果被貼回來：絕不當新單重記；可直接在單上改件數/包裝、或取消/清除
   if (isShippingPullOutput(text)) {
     // 貼回查詢結果＋「清除 確定」→ 清空全部寄運（限老闆）
@@ -2708,6 +2713,7 @@ function rackEntryGuard(text) {
   if (/(匯款|轉帳|改價|損耗|扣除|上班|下班|遲到|請假|入庫|出庫|寄運|寄冰|外勤|借\s*\d|還\s*\d)/.test(t)) return null;
   if (/鐵架未收回|在外面共|台子未收回|目前沒有/.test(t)) return null;   // 查詢/輸出貼回
   if (/^(查|搜|統|拉)/.test(t.trim())) return null;
+  if (!/鐵/.test(t)) return null;   // 完全不含「鐵」→ 非鐵架訊息(冰庫/品項內容等不誤判) — P0
   const lines = t.split('\n').map(function (l) { return l.trim(); }).filter(Boolean);
   if (!lines.length) return null;
   const itemRe = /^(.+?)\s*(?:[*＊×xX:：]\s*|\s+)\d+\s*(?:收\s*\d*|取消|修改\s*\S*)?\s*$/;
