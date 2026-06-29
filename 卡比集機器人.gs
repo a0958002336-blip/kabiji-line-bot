@@ -67,7 +67,7 @@ function handleEvent(event) {
     else replyToLine(replyToken, '訊息紀錄目前只有 ' + Math.max(0, last - 1) + ' 則，不需要清理。');
     return;
   }
-  if (text === '#版本') { replyToLine(replyToken, '✅ 卡比集機器人 v2.4\n本次合併修復：\n【鐵架】借出支援空格格式、分隔符全支援(* ＊ × x X ： : 空格)、收回支援「客戶名收」、不超收\n【寄運】「寄旭陽（修清）」獨立行可正確分出 物流=旭陽、備註=修清\n【速度】寫入鎖縮為5秒、搶不到回「系統忙碌」；查詢不上鎖、不再卡15-20秒\n你看到這行＝最新程式已生效。'); return; }
+  if (text === '#版本') { replyToLine(replyToken, '✅ 卡比集機器人 v2.5\n本次合併修復：\n【鐵架】分隔符全支援、客戶名收、不超收；名稱含「鐵」即可(右昌藍橘鐵等)；收回容錯比對(查得到就收得到)\n【寄運】「寄旭陽（修清）」物流/備註分離；📍備註行尾「取消」不再誤刪整筆客戶\n【速度】寫入鎖縮5秒、搶不到回「系統忙碌」；查詢不上鎖\n你看到這行＝最新程式已生效。'); return; }
   if (text === '#設定工作群組') { addWorkGroup(chatId); replyToLine(replyToken, '✅ 已把「這個群組」設為工作群組。\n目前工作群組數：' + getWorkGroups().length); return; }
   if (text === '#取消工作群組') { removeWorkGroup(chatId); replyToLine(replyToken, '已把這個群組移出工作群組。\n目前工作群組數：' + getWorkGroups().length); return; }
   // ★ 群組權限設定（老闆限定）
@@ -135,7 +135,7 @@ function handleEvent(event) {
       const n = clearAllShipping(); replyToLine(replyToken, '🗑️ 已清除全部寄運資料，共刪除 ' + n + ' 筆。'); return;
     }
     const out = [];
-    const MODRE = /修改|改\s*\d|改\s*(?:包裝|容器)|(?:改|改成|改為|→|➜)\s*[（(]?\s*(?:台子|紙箱|圓籃|袋子|箱)/;
+    const MODRE = /修改|改\s*\d|改\s*(?:包裝|容器)|(?:改|改成|改為|→|➜)\s*[（(]?\s*(?:台子|紙箱|圓籃|袋子|箱)|清備註|清除備註|刪備註|刪除備註|改備註|備註改/;
     if (MODRE.test(text)) {                                // 行內直接改件數/包裝/容器/品名
       const m = handleShippingModify(text);
       if (m.count > 0) out.push(m.reply);
@@ -346,7 +346,7 @@ function handleEvent(event) {
     return;
   }
 
-  if (/(修改|改\s*\d|改\s*包裝)/.test(text) && (/【.+?】/.test(text) || /[：:]/.test(text)) && !/(上班|下班|遲到|請假|鐵架|空車|外勤|評比|借\s*\d|還\s*\d)/.test(text) && !/台子\s*[×xX*]\s*\d/.test(text) && !(/【/.test(text) && /[：:]\s*\d/.test(text))) {
+  if (/(修改|改\s*\d|改\s*包裝|清備註|清除備註|刪備註|刪除備註|改備註|備註改)/.test(text) && (/【.+?】/.test(text) || /[：:]/.test(text)) && !/(上班|下班|遲到|請假|鐵架|空車|外勤|評比|借\s*\d|還\s*\d)/.test(text) && !/台子\s*[×xX*]\s*\d/.test(text) && !(/【/.test(text) && /[：:]\s*\d/.test(text))) {
     const sm = handleShippingModify(text);
     if (sm.count > 0) { replyToLine(replyToken, sm.reply); return; }
     if (/寄運資料/.test(text) || /【.+?】/.test(text)) { replyToLine(replyToken, sm.reply); return; }
@@ -929,8 +929,9 @@ function cancelShipping(text) {
       singleTargets.push({ customer: curCust, name: it.name, grade: it.grade, qty: it.qty, pack: it.pack, unit: it.unit });
       continue;
     }
-    // ★ 📍備註行或其他行以「取消」結尾（沒帶品名數量）→ 取消「目前客戶」整筆
-    if (/取消\s*$/.test(line) && curCust) { fullCustomers.push(curCust); }
+    // ★ 整筆刪除只在「明確指定」時才執行：該行去掉「取消」後為空或等於客戶名，且非 📍 備註行（避免 📍 行尾「取消」誤刪整筆）
+    const _stripped = line.replace(/取消\s*$/, '').trim();
+    if (/取消\s*$/.test(line) && curCust && !/^📍/.test(line) && (_stripped === '' || _stripped === curCust)) { fullCustomers.push(curCust); }
   }
   const toDelete = {}; const summary = [];
   fullCustomers.forEach(function (c) {
@@ -993,6 +994,21 @@ function handleShippingModify(text) {
   };
   const processSeg = function (cust, seg) {
     seg = seg.trim(); if (!seg) return;
+    // ★ 清備註 / 改備註：只動第10欄(備註)，不刪品項、不改數量
+    const ncl = seg.match(/^(.+?)\s*(?:清除|清|刪除|刪)\s*備註\s*$/);
+    if (ncl) {
+      const o = parseShipItem(ncl[1], false, knownCarriers);
+      const ri = findRow(cust, o.name, o.grade, o.qty, o.pack);
+      if (ri >= 0) { sheet.getRange(ri + 1, 10).setValue(''); data[ri][9] = ''; done[ri] = true; summary.push('・' + data[ri][1] + ' ' + data[ri][3] + ' 已清除備註'); cnt++; }
+      return;
+    }
+    const nst = seg.match(/^(.+?)\s*(?:改\s*備註|備註\s*改|設\s*定?\s*備註)\s*[:：]?\s*(\S.*?)\s*$/);
+    if (nst) {
+      const o = parseShipItem(nst[1], false, knownCarriers);
+      const ri = findRow(cust, o.name, o.grade, o.qty, o.pack);
+      if (ri >= 0) { const nb = nst[2].trim(); sheet.getRange(ri + 1, 10).setValue(nb); data[ri][9] = nb; done[ri] = true; summary.push('・' + data[ri][1] + ' ' + data[ri][3] + ' 備註 → ' + nb); cnt++; }
+      return;
+    }
     if (/取消\s*$/.test(seg)) {
       if (!/\d/.test(seg)) return;
       const it = parseShipItem(seg.replace(/取消\s*$/, ''), false, knownCarriers);
@@ -1033,6 +1049,7 @@ function handleShippingModify(text) {
     }
   };
   const PKCHG = /(?:改\s*(?:包裝|容器|成)?|改為|→|➜)\s*[（(]?\s*(?:台子|紙箱|圓籃|袋子|箱)\s*[）)]?\s*$/;
+  const NOTEOP = /(?:清除|清|刪除|刪)\s*備註|改\s*備註|備註\s*改|設\s*定?\s*備註/;
   for (let k = 0; k < lines.length; k++) {
     const line = lines[k];
     const rn = line.match(/^【(.+?)】\s*修改\s*【(.+?)】/);
@@ -1043,8 +1060,8 @@ function handleShippingModify(text) {
     }
     const hm = line.match(/^【(.+?)】\s*$/); if (hm) { curCust = hm[1].replace(/（.*$/, '').trim(); continue; }
     const cm = line.match(/^([^：:【】]+?)\s*[：:]\s*(.+)$/);
-    if (cm && (/(修改|改\s*\d|取消)/.test(cm[2]) || PKCHG.test(cm[2]))) { const cust = cm[1].trim(); cm[2].split(/[、,，]/).forEach(function (s) { processSeg(cust, s); }); continue; }
-    if (/(修改|改\s*\d|取消)/.test(line) || PKCHG.test(line)) processSeg(curCust, line.replace(/^[・·•]/, ''));
+    if (cm && (/(修改|改\s*\d|取消)/.test(cm[2]) || PKCHG.test(cm[2]) || NOTEOP.test(cm[2]))) { const cust = cm[1].trim(); cm[2].split(/[、,，]/).forEach(function (s) { processSeg(cust, s); }); continue; }
+    if (/(修改|改\s*\d|取消)/.test(line) || PKCHG.test(line) || NOTEOP.test(line)) processSeg(curCust, line.replace(/^[・·•]/, ''));
   }
   Object.keys(delRows).map(Number).sort(function (a, b) { return b - a; }).forEach(function (i) { sheet.deleteRow(i + 1); });
   if (!cnt) return { count: 0, reply: '🚚 找不到要修改/取消的寄運資料（品名/數量要跟畫面一致）。' };
@@ -2584,23 +2601,31 @@ function handleRackReturn(text) {
   }
   const taiziRows = [], rackRows = [], lst = []; let cnt = 0;
   const addRow = function (action, rackId, qty, customer) { const row = [nowStr(), '', action, rackId, qty, customer]; if (norm(rackId) === '台子') taiziRows.push(row); else rackRows.push(row); };
+  // 客戶／品項比對：完全相同優先，找不到再退而求其次用「互相包含」容錯（與查詢一致，避免查得到卻收不到）
+  const custKeys = Object.keys(out);
+  const matchCust = function (c) { if (out[c]) return c; const hit = custKeys.filter(function (k) { return k.indexOf(c) !== -1 || c.indexOf(k) !== -1; }); return hit.length === 1 ? hit[0] : c; };
+  const matchRack = function (cmap, r) { if (!cmap) return r; if (r in cmap) return r; const hit = Object.keys(cmap).filter(function (k) { return k.indexOf(r) !== -1 || r.indexOf(k) !== -1; }); return hit.length === 1 ? hit[0] : r; };
   Object.keys(cancelCustomers).forEach(function (c) {
-    const m = out[c] || {};
-    Object.keys(m).forEach(function (r) { if (m[r] > 0) { addRow('入庫', r, m[r], c); lst.push('・' + c + ' ' + r + ' ×' + m[r] + '（整筆取消）'); cnt++; } });
+    const realC = matchCust(c);
+    const m = out[realC] || {};
+    Object.keys(m).forEach(function (r) { if (m[r] > 0) { addRow('入庫', r, m[r], realC); lst.push('・' + realC + ' ' + r + ' ×' + m[r] + '（整筆取消）'); cnt++; } });
   });
   ops.forEach(function (op) {
-    const cur = (out[op.customer] && out[op.customer][op.rackId]) || 0;
+    const realC = matchCust(op.customer);
+    const cmap = out[realC] || {};
+    const realR = matchRack(cmap, op.rackId);
+    const cur = cmap[realR] || 0;
     if (op.mode === 'collect') {
       const amt = (op.amount == null) ? cur : Math.min(op.amount, cur);
-      if (amt > 0) { addRow('入庫', op.rackId, amt, op.customer); lst.push('・' + op.customer + ' ' + op.rackId + ' 收回 ' + amt + (op.amount == null ? '（全部）' : '') + '，剩 ' + (cur - amt)); cnt++; }
+      if (amt > 0) { addRow('入庫', realR, amt, realC); lst.push('・' + realC + ' ' + realR + ' 收回 ' + amt + (op.amount == null ? '（全部）' : '') + '，剩 ' + (cur - amt)); cnt++; }
     } else if (op.mode === 'set') {
       const delta = op.amount - cur;
-      if (delta > 0) addRow('出庫', op.rackId, delta, op.customer); else if (delta < 0) addRow('入庫', op.rackId, -delta, op.customer);
-      if (delta !== 0) { lst.push('・' + op.customer + ' ' + op.rackId + '：' + cur + ' → ' + op.amount); cnt++; }
+      if (delta > 0) addRow('出庫', realR, delta, realC); else if (delta < 0) addRow('入庫', realR, -delta, realC);
+      if (delta !== 0) { lst.push('・' + realC + ' ' + realR + '：' + cur + ' → ' + op.amount); cnt++; }
     } else if (op.mode === 'rename') {
-      if (cur > 0) addRow('入庫', op.rackId, cur, op.customer);
-      const nq = op.newQty || cur; addRow('出庫', op.newRackId, nq, op.customer);
-      lst.push('・' + op.customer + '：' + op.rackId + ' 改名為 ' + op.newRackId + ' ×' + nq); cnt++;
+      if (cur > 0) addRow('入庫', realR, cur, realC);
+      const nq = op.newQty || cur; addRow('出庫', op.newRackId, nq, realC);
+      lst.push('・' + realC + '：' + realR + ' 改名為 ' + op.newRackId + ' ×' + nq); cnt++;
     }
   });
   if (!rackRows.length && !taiziRows.length) return { count: 0, reply: '🔧 沒有可處理的鐵架（可能該客戶目前沒有未收回，或格式對不上）。' };
@@ -2684,7 +2709,7 @@ function rackEntryGuard(text) {
     hasItem = true; let nm = im[1].trim();
     if (!retailerKnown && /\s/.test(nm)) { const sp = nm.split(/\s+/); retailers.push(sp[0]); curRetailer = sp[0]; nm = sp.slice(1).join(' ').trim() || sp[0]; }
     if (/^台子$/.test(nm)) { hasTaizi = true; return true; }
-    if (!/鐵架/.test(nm)) badNames.push(s);
+    if (!/鐵/.test(nm)) badNames.push(s);
     return true;
   };
   lines.forEach(function (line) {
@@ -2709,7 +2734,7 @@ function rackEntryGuard(text) {
 }
 /* ---- 鐵架固定格式：零售商 + 品牌鐵架*數量（收回多一行「收」）；不合格跳警示教學 ---- */
 function rackFormatWarning(badLines) {
-  let w = '⚠️ 鐵架輸入格式錯誤，已暫停記錄，請修正後重新輸入。\n（為了統計一致，鐵架名稱一定要含「鐵架」二字、一張單只填一個零售商）';
+  let w = '⚠️ 鐵架輸入格式錯誤，已暫停記錄，請修正後重新輸入。\n（為了統計一致，鐵架名稱一定要含「鐵」字、一張單只填一個零售商）';
   if (badLines && badLines.length) w += '\n\n❌ 下列不符合：\n・' + badLines.join('\n・');
   w += '\n\n✅ 正確格式：\n〔出借〕\n零售商名稱\n品牌鐵架*數量\n例：\n中原食品\n旭陽鐵架*5\n勝山鐵架*1\n'
     + '\n〔收回〕\n零售商名稱\n收\n品牌鐵架*數量\n例：\n陳記\n收\n旭陽鐵架*4\n勝山鐵架*1';
@@ -2743,7 +2768,7 @@ function rackSlipStrict(text) {
   }
   if (!sawItem || !customer) return { handled: false };
   if (items.every(function (it) { return /^台子$/.test(it.name); })) return { handled: false };   // 純台子交給台子處理
-  const bad = items.filter(function (it) { return !/鐵架/.test(it.name); });
+  const bad = items.filter(function (it) { return !/鐵/.test(it.name); });
   if (bad.length || sawOther) return { handled: true, reply: rackFormatWarning(bad.map(function (b) { return b.raw; })) };
   // 零售商名稱防呆：打了一個「不完全相同、但很像既有客戶」的名稱 → 跳警示請確認
   const knownC = knownRetailers();
