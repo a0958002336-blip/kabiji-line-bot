@@ -135,7 +135,7 @@ function handleEvent(event) {
       const n = clearAllShipping(); replyToLine(replyToken, '🗑️ 已清除全部寄運資料，共刪除 ' + n + ' 筆。'); return;
     }
     const out = [];
-    const MODRE = /修改|改\s*\d|改\s*(?:包裝|容器)|(?:改|改成|改為|→|➜)\s*[（(]?\s*(?:台子|紙箱|圓籃|袋子|箱)|清備註|清除備註|刪備註|刪除備註|改備註|備註改/;
+    const MODRE = /修改|改\s*\d|改\s*(?:包裝|容器)|(?:改|改成|改為|→|➜)\s*[（(]?\s*(?:台子|紙箱|圓籃|袋子|箱)|清備註|清除備註|刪備註|刪除備註|改備註|備註改|取消\s*備註/;
     if (MODRE.test(text)) {                                // 行內直接改件數/包裝/容器/品名
       const m = handleShippingModify(text);
       if (m.count > 0) out.push(m.reply);
@@ -346,7 +346,7 @@ function handleEvent(event) {
     return;
   }
 
-  if (/(修改|改\s*\d|改\s*包裝|清備註|清除備註|刪備註|刪除備註|改備註|備註改)/.test(text) && (/【.+?】/.test(text) || /[：:]/.test(text)) && !/(上班|下班|遲到|請假|鐵架|空車|外勤|評比|借\s*\d|還\s*\d)/.test(text) && !/台子\s*[×xX*]\s*\d/.test(text) && !(/【/.test(text) && /[：:]\s*\d/.test(text))) {
+  if (/(修改|改\s*\d|改\s*包裝|清備註|清除備註|刪備註|刪除備註|改備註|備註改|取消\s*備註)/.test(text) && (/【.+?】/.test(text) || /[：:]/.test(text)) && !/(上班|下班|遲到|請假|鐵架|空車|外勤|評比|借\s*\d|還\s*\d)/.test(text) && !/台子\s*[×xX*]\s*\d/.test(text) && !(/【/.test(text) && /[：:]\s*\d/.test(text))) {
     const sm = handleShippingModify(text);
     if (sm.count > 0) { replyToLine(replyToken, sm.reply); return; }
     if (/寄運資料/.test(text) || /【.+?】/.test(text)) { replyToLine(replyToken, sm.reply); return; }
@@ -995,7 +995,7 @@ function handleShippingModify(text) {
   const processSeg = function (cust, seg) {
     seg = seg.trim(); if (!seg) return;
     // ★ 清備註 / 改備註：只動第10欄(備註)，不刪品項、不改數量
-    const ncl = seg.match(/^(.+?)\s*(?:清除|清|刪除|刪)\s*備註\s*$/);
+    const ncl = seg.match(/^(.+?)\s*(?:清除|清|刪除|刪|取消)\s*備註\s*$/);
     if (ncl) {
       const o = parseShipItem(ncl[1], false, knownCarriers);
       const ri = findRow(cust, o.name, o.grade, o.qty, o.pack);
@@ -1049,7 +1049,7 @@ function handleShippingModify(text) {
     }
   };
   const PKCHG = /(?:改\s*(?:包裝|容器|成)?|改為|→|➜)\s*[（(]?\s*(?:台子|紙箱|圓籃|袋子|箱)\s*[）)]?\s*$/;
-  const NOTEOP = /(?:清除|清|刪除|刪)\s*備註|改\s*備註|備註\s*改|設\s*定?\s*備註/;
+  const NOTEOP = /(?:清除|清|刪除|刪|取消)\s*備註|改\s*備註|備註\s*改|設\s*定?\s*備註/;
   for (let k = 0; k < lines.length; k++) {
     const line = lines[k];
     const rn = line.match(/^【(.+?)】\s*修改\s*【(.+?)】/);
@@ -1059,6 +1059,14 @@ function handleShippingModify(text) {
       if (n) { summary.push('客戶改名：' + oldC + ' → ' + newC + '（' + n + ' 筆）'); cnt += n; } curCust = newC; continue;
     }
     const hm = line.match(/^【(.+?)】\s*$/); if (hm) { curCust = hm[1].replace(/（.*$/, '').trim(); continue; }
+    // ★ 貼回查詢的 📍備註行寫「清備註/取消備註/刪備註」→ 清掉目前【客戶】今天所有列的備註（📍行無品名，視為客戶層級；不刪品項）
+    if (curCust && /^📍/.test(line) && /(?:清除|清|刪除|刪|取消)\s*備註/.test(line)) {
+      const _td = parseYMD(Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy/MM/dd'));
+      let n = 0;
+      for (let i = 1; i < data.length; i++) { if (String(data[i][1]).indexOf(curCust) !== -1 && ymdNum(data[i][0]) === _td && data[i][9]) { sheet.getRange(i + 1, 10).setValue(''); data[i][9] = ''; done[i] = true; n++; } }
+      if (n) { summary.push('・' + curCust + ' 已清除備註（' + n + ' 筆）'); cnt += n; }
+      continue;
+    }
     const cm = line.match(/^([^：:【】]+?)\s*[：:]\s*(.+)$/);
     if (cm && (/(修改|改\s*\d|取消)/.test(cm[2]) || PKCHG.test(cm[2]) || NOTEOP.test(cm[2]))) { const cust = cm[1].trim(); cm[2].split(/[、,，]/).forEach(function (s) { processSeg(cust, s); }); continue; }
     if (/(修改|改\s*\d|取消)/.test(line) || PKCHG.test(line) || NOTEOP.test(line)) processSeg(curCust, line.replace(/^[・·•]/, ''));
