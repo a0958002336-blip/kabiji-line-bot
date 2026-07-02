@@ -67,7 +67,7 @@ function handleEvent(event) {
     else replyToLine(replyToken, '訊息紀錄目前只有 ' + Math.max(0, last - 1) + ' 則，不需要清理。');
     return;
   }
-  if (text === '#版本') { replyToLine(replyToken, '✅ 卡比集機器人 v2.57\n本次修復：\n【P0冰庫】冰庫查詢結果貼回不再被誤判成「鐵架格式錯誤」；無「鐵」的品項/庫存內容不進鐵架\n【鐵架】分隔符全支援、客戶名收、不超收；名稱含「鐵」即可；收回容錯比對\n【寄運】「寄旭陽（修清）」物流/備註分離；📍備註行尾「取消」不再誤刪整筆\n【速度】寫入鎖縮5秒、查詢不上鎖\n你看到這行＝最新程式已生效。'); return; }
+  if (text === '#版本') { replyToLine(replyToken, '✅ 卡比集機器人 v2.58\n本次修復：\n【Bug1寄運誤判】1828／首行純數字不再被誤記為寄運（一般交易不建立寄運資料）\n【前版P0冰庫】冰庫查詢結果貼回不再被誤判成「鐵架格式錯誤」；無「鐵」的品項/庫存內容不進鐵架\n【鐵架】分隔符全支援、客戶名收、不超收；名稱含「鐵」即可；收回容錯比對\n【寄運】「寄旭陽（修清）」物流/備註分離；📍備註行尾「取消」不再誤刪整筆\n【速度】寫入鎖縮5秒、查詢不上鎖\n你看到這行＝最新程式已生效。'); return; }
   if (text === '#設定工作群組') { addWorkGroup(chatId); replyToLine(replyToken, '✅ 已把「這個群組」設為工作群組。\n目前工作群組數：' + getWorkGroups().length); return; }
   if (text === '#取消工作群組') { removeWorkGroup(chatId); replyToLine(replyToken, '已把這個群組移出工作群組。\n目前工作群組數：' + getWorkGroups().length); return; }
   // ★ 群組權限設定（老闆限定）
@@ -887,7 +887,9 @@ function parseShipping(text) {
       }
       const wm = line.match(/寄\s*[車運]\s*([^\s)）]+)/) || line.match(/寄\s*([^\s)）]+)\s*$/);
       logistics = wm ? wm[1] : '';
-      customer = line.replace(/[\(（]?\s*寄\s*[車運到去]?\s*[^\s)）]+\s*[）)]?/, '').replace(/自己載|自取/g, '').replace(/[\(（）\)]/g, '').trim();
+      const _cand = line.replace(/[\(（]?\s*寄\s*[車運到去]?\s*[^\s)）]+\s*[）)]?/, '').replace(/自己載|自取/g, '').replace(/[\(（）\)]/g, '').trim();
+      // Bug1/R1.1：客戶抬頭若為純數字且該行無物流關鍵字（寄）→ 不是客戶、不建立寄運（例：1828 一般交易不得誤記為寄運）
+      customer = (/^\d+$/.test(_cand) && !/寄/.test(line)) ? '' : _cand;
     }
   }
   if (msgLogistics) records.forEach(function (r) { if (!r.logistics) r.logistics = msgLogistics; });
