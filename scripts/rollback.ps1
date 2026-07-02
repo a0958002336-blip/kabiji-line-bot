@@ -1,4 +1,4 @@
-# 卡比集機器人 一鍵 Rollback
+﻿# 卡比集機器人 一鍵 Rollback
 # 用法:
 #   scripts\rollback.ps1 -List
 #   scripts\rollback.ps1 -Tag v2.57-stable
