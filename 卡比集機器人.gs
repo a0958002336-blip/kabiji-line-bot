@@ -44,7 +44,9 @@ function doPost(e) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
+var __REQ_CACHE = {};
 function handleEvent(event) {
+  __REQ_CACHE = {};   // 效能：每則事件清空 request 快取（同事件內同表只掃一次；輸出不變）
   if (event.type !== 'message') return;
   const source = event.source;
   if (event.message.type !== 'text') {
@@ -2700,11 +2702,13 @@ function parseRack(rest) {
 }
 /* ---- 已知零售商名單（鐵架/寄運/冰庫客戶彙整），用於名稱防呆 ---- */
 function knownRetailers() {
+  if (typeof __REQ_CACHE !== 'undefined' && __REQ_CACHE.knownRetailers) return __REQ_CACHE.knownRetailers;
   const set = {}; const arr = [];
   function add(name) { const c = String(name || '').trim(); if (c && !set[c]) { set[c] = 1; arr.push(c); } }
   try { const d = getSheet(SHEET_RACK).getDataRange().getValues(); for (let i = 1; i < d.length; i++) add(d[i][5]); } catch (e) { }
   try { const d = getSheet(SHEET_SHIP).getDataRange().getValues(); for (let i = 1; i < d.length; i++) add(d[i][1]); } catch (e) { }
   try { const d = getSheet(SHEET_FREEZER).getDataRange().getValues(); for (let i = 1; i < d.length; i++) add(d[i][1]); } catch (e) { }
+  if (typeof __REQ_CACHE !== 'undefined') __REQ_CACHE.knownRetailers = arr;
   return arr;
 }
 /* ---- 鐵架前置驗證閘：涵蓋【】/多行/單行所有格式，名稱要含「鐵架」、零售商要一致 ---- */
