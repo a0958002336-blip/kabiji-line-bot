@@ -60,29 +60,19 @@ function handleEvent(event) {
   const isQuote = !!(event.message && event.message.quotedMessageId);   // 引用(Line Quote)訊息 → 只能當參考
 
   // # 控制指令（任何群組都能用）
-  if (text === '#註冊老闆') {
-    const cur = PROPS.getProperty('OWNER_USER_ID');
-    if (cur && cur !== source.userId) { replyToLine(replyToken, '🔒 已有老闆註冊，無法搶注。若要轉移，請由現任老闆打「#轉移老闆 確定」後，新人再打「#註冊老闆」。'); return; }
-    PROPS.setProperty('OWNER_USER_ID', source.userId); replyToLine(replyToken, '✅ 老闆身分註冊成功！'); return;
-  }
-  if (/^#轉移老闆/.test(text)) {
-    if (!isAdmin(source.userId)) { replyToLine(replyToken, '🔒 僅限現任老闆轉移。'); return; }
-    if (!/確定/.test(text)) { replyToLine(replyToken, '⚠️ 這會解除你的老闆身分，改由下一位打「#註冊老闆」接手。\n確定請打：#轉移老闆 確定'); return; }
-    PROPS.deleteProperty('OWNER_USER_ID'); replyToLine(replyToken, '✅ 已解除老闆身分。請下一位在本群打「#註冊老闆」完成接手。'); return;
-  }
+  if (text === '#註冊老闆') { PROPS.setProperty('OWNER_USER_ID', source.userId); replyToLine(replyToken, '✅ 老闆身分註冊成功！'); return; }
   if (text === '#我的ID') { replyToLine(replyToken, '你的 userId：\n' + source.userId); return; }
   if (/^(指令表|指令|總指令|指令大全|指令查詢|查指令|幫助|#指令表|#指令|#幫助|功能表)\s*$/.test(text)) { replyToLine(replyToken, commandSheet()); return; }
-  if (/^#(匯入預設客戶資訊|匯入客戶資訊|預設客戶資訊|匯入停車資訊|匯入停車)\s*$/.test(text)) { if (!ownerGate(source, replyToken)) return; const r = seedParking(); replyToLine(replyToken, '🅿️ 已匯入預設客戶資訊 ' + r.count + ' 筆：\n' + r.keys.join('、') + '\n\n打「查鳳山雅君」或「客戶停車位置查詢」試試。'); return; }
+  if (/^#(匯入預設客戶資訊|匯入客戶資訊|預設客戶資訊|匯入停車資訊|匯入停車)\s*$/.test(text)) { const r = seedParking(); replyToLine(replyToken, '🅿️ 已匯入預設客戶資訊 ' + r.count + ' 筆：\n' + r.keys.join('、') + '\n\n打「查鳳山雅君」或「客戶停車位置查詢」試試。'); return; }
   if (/^#清理訊息紀錄/.test(text)) {
-    if (!ownerGate(source, replyToken)) return;
     const sheet = getSheet(SHEET_MSG); const last = sheet.getLastRow();
     if (last > 2001) { sheet.deleteRows(2, last - 2001); replyToLine(replyToken, '🧹 已清理舊訊息紀錄，只保留最近 2000 則。'); }
     else replyToLine(replyToken, '訊息紀錄目前只有 ' + Math.max(0, last - 1) + ' 則，不需要清理。');
     return;
   }
   if (text === '#版本') { replyToLine(replyToken, '✅ 卡比集機器人 v2.58\n本次修復：\n【Bug1寄運誤判】1828／首行純數字不再被誤記為寄運（一般交易不建立寄運資料）\n【前版P0冰庫】冰庫查詢結果貼回不再被誤判成「鐵架格式錯誤」；無「鐵」的品項/庫存內容不進鐵架\n【鐵架】分隔符全支援、客戶名收、不超收；名稱含「鐵」即可；收回容錯比對\n【寄運】「寄旭陽（修清）」物流/備註分離；📍備註行尾「取消」不再誤刪整筆\n【速度】寫入鎖縮5秒、查詢不上鎖\n你看到這行＝最新程式已生效。'); return; }
-  if (text === '#設定工作群組') { if (!ownerGate(source, replyToken)) return; addWorkGroup(chatId); replyToLine(replyToken, '✅ 已把「這個群組」設為工作群組。\n目前工作群組數：' + getWorkGroups().length); return; }
-  if (text === '#取消工作群組') { if (!ownerGate(source, replyToken)) return; removeWorkGroup(chatId); replyToLine(replyToken, '已把這個群組移出工作群組。\n目前工作群組數：' + getWorkGroups().length); return; }
+  if (text === '#設定工作群組') { addWorkGroup(chatId); replyToLine(replyToken, '✅ 已把「這個群組」設為工作群組。\n目前工作群組數：' + getWorkGroups().length); return; }
+  if (text === '#取消工作群組') { removeWorkGroup(chatId); replyToLine(replyToken, '已把這個群組移出工作群組。\n目前工作群組數：' + getWorkGroups().length); return; }
   // ★ 群組權限設定（老闆限定）
   if (text === '#群組ID') { replyToLine(replyToken, '本群組 ID：\n' + chatId + '\n權限：' + getPerm(chatId).type + (getPerm(chatId).canWrite ? '（可寫入）' : '（唯讀）')); return; }
   if (text === '#設為管理群組') { if (!isAdmin(source.userId)) { replyToLine(replyToken, '🔒 僅限老闆。'); return; } addGroupId('ADMIN_GROUP_IDS', chatId); removeGroupId('MARKET_GROUP_IDS', chatId); replyToLine(replyToken, '✅ 已設為內部管理群組(可寫入)。'); return; }
@@ -91,44 +81,40 @@ function handleEvent(event) {
   if (text === '#移除市場群組') { if (!isAdmin(source.userId)) { replyToLine(replyToken, '🔒 僅限老闆。'); return; } removeGroupId('MARKET_GROUP_IDS', chatId); replyToLine(replyToken, '已移出市場群組。'); return; }
   if (text === '#群組權限') { replyToLine(replyToken, '🔐 管理群組：' + (listProp('ADMIN_GROUP_IDS').join('、') || '(無)') + '\n市場群組：' + (listProp('MARKET_GROUP_IDS').join('、') || '(無)') + '\n本群組：' + getPerm(chatId).type); return; }
   if (/^#設定客戶/.test(text)) {
-    if (!ownerGate(source, replyToken)) return;
     const name = text.replace(/^#設定客戶/, '').trim();
     if (!name) { replyToLine(replyToken, '請在後面加客戶名稱，例如：\n#設定客戶 溪湖青農合作社-阿漢'); return; }
     setGroupCustomer(chatId, name);
     replyToLine(replyToken, '✅ 已綁定：這個群組 →「' + name + '」');
     return;
   }
-  if (text === '#取消客戶') { if (!ownerGate(source, replyToken)) return; removeGroupCustomer(chatId); replyToLine(replyToken, '已取消這個群組的客戶綁定。'); return; }
+  if (text === '#取消客戶') { removeGroupCustomer(chatId); replyToLine(replyToken, '已取消這個群組的客戶綁定。'); return; }
   if (text === '#查客戶' || text === '#我的客戶') { const c = getGroupCustomer(chatId); replyToLine(replyToken, c ? '這個群組綁定的客戶：' + c : '這個群組還沒綁定客戶。'); return; }
   if (text === '#貨主名單') { const v = getVendors(); replyToLine(replyToken, v.length ? '📋 目前貨主名單：\n' + v.join('、') : '目前沒有貨主。'); return; }
   if (text === '#冰庫名單') { const w = getWarehouses(); replyToLine(replyToken, w.length ? '🧊 目前冰庫名單：\n' + w.join('\n') : '目前沒有冰庫。'); return; }
-  if (text === '#清空冰庫名單' || text === '#清除冰庫名單') { if (!ownerGate(source, replyToken)) return; setWarehouses([]); replyToLine(replyToken, '✅ 已清空冰庫名單。'); return; }
+  if (text === '#清空冰庫名單' || text === '#清除冰庫名單') { setWarehouses([]); replyToLine(replyToken, '✅ 已清空冰庫名單。'); return; }
   if (/^#新增冰庫/m.test(text)) {
-    if (!ownerGate(source, replyToken)) return;
     const added = [];
     text.split('\n').forEach(function (ln) { const m = ln.trim().match(/^#新增冰庫\s*(.+)$/); if (m && m[1].trim()) { addWarehouse(m[1].trim()); added.push(m[1].trim()); } });
     if (!added.length) { replyToLine(replyToken, '請加名稱，例：#新增冰庫 旭陽2號庫'); return; }
     replyToLine(replyToken, '✅ 已新增冰庫：' + added.join('、') + '\n目前名單：\n' + getWarehouses().join('\n')); return;
   }
   if (/^#移除冰庫/m.test(text)) {
-    if (!ownerGate(source, replyToken)) return;
     const removed = [];
     text.split('\n').forEach(function (ln) { const m = ln.trim().match(/^#移除冰庫\s*(.+)$/); if (m && m[1].trim()) { removeWarehouse(m[1].trim()); removed.push(m[1].trim()); } });
     replyToLine(replyToken, '✅ 已移除冰庫：' + (removed.join('、') || '（無）') + '\n目前名單：\n' + (getWarehouses().join('\n') || '（無）')); return;
   }
-  if (/^#新增貨主/.test(text)) { if (!ownerGate(source, replyToken)) return; const n = text.replace(/^#新增貨主/, '').trim(); if (!n) { replyToLine(replyToken, '請加名稱，例：#新增貨主 旭陽'); return; } addVendor(n); replyToLine(replyToken, '✅ 已新增貨主：' + n + '\n目前名單：' + getVendors().join('、')); return; }
-  if (/^#移除貨主/.test(text)) { if (!ownerGate(source, replyToken)) return; const n = text.replace(/^#移除貨主/, '').trim(); removeVendor(n); replyToLine(replyToken, '已移除貨主：' + n + '\n目前名單：' + getVendors().join('、')); return; }
+  if (/^#新增貨主/.test(text)) { const n = text.replace(/^#新增貨主/, '').trim(); if (!n) { replyToLine(replyToken, '請加名稱，例：#新增貨主 旭陽'); return; } addVendor(n); replyToLine(replyToken, '✅ 已新增貨主：' + n + '\n目前名單：' + getVendors().join('、')); return; }
+  if (/^#移除貨主/.test(text)) { const n = text.replace(/^#移除貨主/, '').trim(); removeVendor(n); replyToLine(replyToken, '已移除貨主：' + n + '\n目前名單：' + getVendors().join('、')); return; }
   if (/^#物流客戶/.test(text)) { const c = text.replace(/^#物流客戶/, '').trim() || '旭陽'; const l = getCarrierCustomers(c); replyToLine(replyToken, l.length ? '🚚 ' + c + ' 的客戶名單：\n' + l.join('、') : c + ' 還沒設定客戶名單。'); return; }
   if (/^#設定物流客戶/.test(text)) {
-    if (!ownerGate(source, replyToken)) return;
     const rest = text.replace(/^#設定物流客戶/, '').trim().split(/[\s,，、]+/).filter(Boolean);
     if (rest.length < 2) { replyToLine(replyToken, '格式：#設定物流客戶 旭陽 玉美加工廠 玉美供食廠 …'); return; }
     setCarrierCustomers(rest[0], rest.slice(1));
     replyToLine(replyToken, '✅ 已設定 ' + rest[0] + ' 的客戶名單（' + (rest.length - 1) + ' 位）：\n' + rest.slice(1).join('、'));
     return;
   }
-  if (text === '#安靜') { if (!ownerGate(source, replyToken)) return; PROPS.setProperty('QUIET', '1'); replyToLine(replyToken, '🤫 已開啟安靜模式。'); return; }
-  if (text === '#取消安靜') { if (!ownerGate(source, replyToken)) return; PROPS.setProperty('QUIET', ''); replyToLine(replyToken, '🔊 已關閉安靜模式。'); return; }
+  if (text === '#安靜') { PROPS.setProperty('QUIET', '1'); replyToLine(replyToken, '🤫 已開啟安靜模式。'); return; }
+  if (text === '#取消安靜') { PROPS.setProperty('QUIET', ''); replyToLine(replyToken, '🔊 已關閉安靜模式。'); return; }
 
   // 一律記錄訊息供搜尋／統整（查詢類指令不記）
   if (!/^(#|中控總覽|中控總攬|今日總覽|今日總攬|總覽|總攬|中控|出外勤|查\s*外勤|外勤補貼|全部外勤|所有外勤|外勤全部|外勤紀錄|外勤記錄|外勤明細|外勤清單|今日送貨|當日送貨|送貨內容|送貨訊息|今日廢話|當日廢話|廢話內容|閒聊內容|今日閒聊|查廢話|發言次數|留言次數|發言統計|留言統計|發言排行|留言排行|誰發言|誰留言|查發言|查留言|客戶資訊|客戶停車|停車地點|停車位置|停車一覽|查詢|查全部停車|查所有停車|查地點|地點代號|地點清單|地點一覽|地址清單|指令表|指令|總指令|指令大全|指令查詢|查指令|幫助|功能表|搜尋|收尋|搜|件數|總件數|統整金額|統計金額|金額統整|統整|統計|冰庫庫存|冰庫總覽|查冰庫|冰庫設定|鐵架庫存|鐵架總覽|查鐵架|鐵架剩餘|查台子|台子總覽|台子剩餘|未收回台子|台子庫存|查改價|改價紀錄|改價查詢|查損耗|損耗紀錄|損耗查詢|查遲到|查請假|查上班|查下班|查員工出勤|查出勤|出勤查詢|出勤紀錄|出勤統計|查出勤統計|綜合評比|獎金評比|員工評比|評比|查\S*評比|今日鐵架|今天鐵架|鐵架記錄|今日冰庫|今天冰庫|冰庫記錄|拉出當日群組訊息|拉出群組訊息|當日群組訊息|今日群組訊息|當日訊息|今日訊息|拉訊息|拉出訊息|今日對話|當日對話)/.test(text)) logGroupMessage(text, source.userId, source.groupId || source.roomId);
@@ -666,8 +652,6 @@ function removeWorkGroup(id) { const list = getWorkGroups().filter(function (x) 
 
 /* ★ 群組權限中介層 */
 function isAdmin(userId) { return !!userId && userId === PROPS.getProperty('OWNER_USER_ID'); }
-// Task1 安全：老闆限定閘門。回 true=通過；false=已回拒絕訊息，呼叫端應 return。
-function ownerGate(source, replyToken) { if (!isAdmin(source && source.userId)) { replyToLine(replyToken, '🔒 僅限老闆。'); return false; } return true; }
 function listProp(key) { const raw = PROPS.getProperty(key) || ''; return raw.split(/[,，\s]+/).filter(Boolean); }
 function getPerm(chatId) {
   const admin = listProp('ADMIN_GROUP_IDS'), market = listProp('MARKET_GROUP_IDS');
