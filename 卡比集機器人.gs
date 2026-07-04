@@ -57,6 +57,7 @@ function handleEvent(event) {
   const text = (event.message.text || '').trim();
   const replyToken = event.replyToken;
   const chatId = source.groupId || source.roomId || source.userId;
+  const isQuote = !!(event.message && event.message.quotedMessageId);   // 引用(Line Quote)訊息 → 只能當參考
 
   // # 控制指令（任何群組都能用）
   if (text === '#註冊老闆') { PROPS.setProperty('OWNER_USER_ID', source.userId); replyToLine(replyToken, '✅ 老闆身分註冊成功！'); return; }
@@ -125,6 +126,13 @@ function handleEvent(event) {
     if (cmd && MARKET_READ[cmd.type]) { const reply = runReadCommand(cmd, chatId); if (reply) replyToLine(replyToken, reply); return; }
     if (looksLikeWrite(text, cmd)) auditDenied(text, source.userId, perm.type);
     return;   // 聊天/非授權查詢/寫入嘗試 → 一律不執行、不回覆
+  }
+  // ★ 引用(Line Quote)訊息：只能當參考，禁止直接觸發任何 ERP 寫入（P0 安全規則）
+  //   —— 引用內容僅允許純查詢指令；其餘一律不執行、不寫入。
+  if (isQuote) {
+    const qcmd = parseCommand(text);
+    if (qcmd && MARKET_READ[qcmd.type]) { const reply = runReadCommand(qcmd, chatId); if (reply) replyToLine(replyToken, reply); }
+    return;
   }
   // 管理群組內：明顯閒聊且非合法指令 → 不觸發任何功能
   if (looksLikeChat(text) && !parseCommand(text)) { return; }
@@ -544,6 +552,9 @@ function handleEvent(event) {
     if (ship.count > 0 || iceReply || rackReply) {
       if (ship.count > 0) {
         logIntent('寄運建立', text);                                  // 除錯：印出 Intent/Confidence/Reason
+        // ★ P0 硬攔：寄運寫入前必須 Intent Confidence≥95（「寧可不執行也不執行錯」）。
+        //   正式寄運單（客戶+品項+件數）恒判為 shipping(96)，故不影響正常寫入；異常則不建立並提示。
+        if (!intentAllowsWrite(text)) { if (!quiet()) replyToLine(replyToken, '⚠️ 無法確認指令，請重新輸入正式寄運格式（客戶＋品項＋件數，例：漢光⏎南瓜 特30件 寄旭陽）。'); return; }
         const sh = getSheet(SHEET_SHIP);
         const tz = getSheet(SHEET_TAIZI);
         let taiziTotal = 0; const taiziSkip = [];

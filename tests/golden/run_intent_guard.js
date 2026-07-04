@@ -13,11 +13,14 @@ const ERP_SHEETS = ['寄運資料', '出勤打卡', '外勤補貼', '財務改�
 let fails = 0; const out = [];
 function check(name, cond, detail) { if (cond) out.push('PASS ' + name); else { fails++; out.push('FAIL ' + name + '  ::  ' + (detail || '')); } }
 
-function drive(text) {
+function drive(text, opts) {
+  opts = opts || {};
   const env = createEnv();
   env.scriptProps.setProperty('OWNER_USER_ID', OWNER);
   env.scriptProps.setProperty('ADMIN_GROUP_IDS', G);   // 管理群組（可寫入）— 最嚴格情境
-  const ev = { type: 'message', replyToken: 'RT', message: { type: 'text', text: text }, source: { groupId: G, userId: OWNER } };
+  const msg = { type: 'text', text: text };
+  if (opts.quote) msg.quotedMessageId = 'QMID_123';    // 模擬 Line Quote 引用
+  const ev = { type: 'message', replyToken: 'RT', message: msg, source: { groupId: G, userId: OWNER } };
   let err = null; try { env.fns.handleEvent(ev); } catch (e) { err = String(e && e.message || e); }
   const writes = {};
   ERP_SHEETS.forEach(function (s) { const rows = env.sheets[s] ? env.sheets[s].__rows.slice(1) : []; if (rows.length) writes[s] = rows.length; });
@@ -61,6 +64,25 @@ function totalWrites(w) { return Object.keys(w).reduce(function (a, k) { return 
   const r = drive('漢光\n老八田南瓜 特30件（漢光三場950元 需收台回來）');
   check('D1 漢光30件 → 建立寄運 1 筆', r.writes['寄運資料'] === 1, JSON.stringify(r.writes));
   check('D2 漢光30件 → 不建立收款/財務', !r.writes['財務改價'], JSON.stringify(r.writes));
+})();
+
+/* ---------- E. Line Quote 引用：不得直接寫入 ERP ---------- */
+(function () {
+  // 引用一張正式寄運單的文字 → 因為是「引用」，不得建立寄運
+  const q = drive('漢光\n老八田南瓜 特30件 寄旭陽', { quote: true });
+  check('E1 引用寄運單 → 不建立寄運', !q.writes['寄運資料'] && totalWrites(q.writes) === 0, JSON.stringify(q.writes));
+  // 對照組：同一則非引用 → 正常建立寄運（確認守衛沒有誤殺正常寫入）
+  const n = drive('漢光\n老八田南瓜 特30件 寄旭陽', { quote: false });
+  check('E2 對照：非引用同文字 → 正常建立寄運 1 筆', n.writes['寄運資料'] === 1, JSON.stringify(n.writes));
+  // 引用 + 打卡 → 不得寫入出勤
+  const q2 = drive('小明 上班', { quote: true });
+  check('E3 引用打卡 → 不建立出勤', !q2.writes['出勤打卡'] && totalWrites(q2.writes) === 0, JSON.stringify(q2.writes));
+})();
+
+/* ---------- F. 硬攔：正常寄運不受影響（回歸保護）---------- */
+(function () {
+  const ok = drive('陳老闆\n高麗菜 中 20件 寄旭陽');
+  check('F1 正式寄運單 → 硬攔放行、建立 1 筆', ok.writes['寄運資料'] === 1, JSON.stringify(ok.writes));
 })();
 
 /* ---------- 報告 ---------- */
