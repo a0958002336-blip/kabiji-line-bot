@@ -62,6 +62,8 @@ const EXPORT_NAMES = [
   'handleDuty',
   'recordLoan',
   'recordHire',
+  'classifyIntent',
+  'intentAllowsWrite',
 ];
 
 /* ------------------------------------------------------------------ */

@@ -543,6 +543,7 @@ function handleEvent(event) {
     if (/[(（][^)）]*[*＊]\s*\d+[^)）]*[)）]/.test(text)) { const rk = handleRackParenBatch(text); if (rk.count > 0) rackReply = rk.reply; }
     if (ship.count > 0 || iceReply || rackReply) {
       if (ship.count > 0) {
+        logIntent('寄運建立', text);                                  // 除錯：印出 Intent/Confidence/Reason
         const sh = getSheet(SHEET_SHIP);
         const tz = getSheet(SHEET_TAIZI);
         let taiziTotal = 0; const taiziSkip = [];
@@ -674,6 +675,36 @@ function looksLikeWrite(text, cmd) {
 }
 var CHAT_RE = /(還沒|沒報|報了沒|報一下|他們|我們|大概|應該|可能|好像|不知道|是不是|要不要|怎麼|為什麼|沒有|然後|可是|但是|其實|嗎$|吧$|呢$|喔$|啦$)/;
 function looksLikeChat(text) { return CHAT_RE.test(String(text || '')); }
+/* ==========================================================================
+ * Intent 分類（第一層防呆 / 除錯可觀測性）
+ * --------------------------------------------------------------------------
+ * 規則式、可判定的意圖分類，輸出 { intent, confidence, reason }，用途：
+ *   ① 產出 Intent/Confidence/Reason 除錯軌跡（寫入前 console.log）。
+ *   ② 鎖定不變量：「收台/空籃/棧板回收 ≠ 收款」「聊天填充詞 ≠ 寄運」。
+ * 原則「寧可不執行，也不能執行錯」：confidence < 95 的意圖不應建立 ERP 資料。
+ * 註：實際寫入閘門仍由各功能既有的「正式格式」判斷把關（此函式不單獨改變寫入行為，
+ *     以免破壞既有功能）；本函式提供分類與門檻判斷供守門與除錯使用。
+ * ========================================================================== */
+var PAYMENT_RE = /(收款|收到款|已收款|收現|匯款|轉帳|付款|收錢)/;         // 正式收款語意
+var COLLECT_RE = /(收台|台回來|空籃|空籃回收|籃子回收|棧板回收)/;         // 容器/台子回收 → 一律非收款
+var CHAT_FILLER_RE = /^(好|嗯|ok|收到|今天|用今天的|等等|回來|修改一下|改一下|了解|可以|哈+|哈哈+|沒事|算了)$/i;
+function classifyIntent(text) {
+  const t = String(text || '').trim();
+  if (!t) return { intent: 'empty', confidence: 0, reason: '空訊息' };
+  // ① 完整寄運/出貨格式（件數＋品項）優先——避免把「有備註需收台」的正式出貨單誤判為回收/收款
+  if (/\d+\s*(?:件|台(?!子)|包|箱)/.test(t) && !/扣除|損耗|入庫|出庫|匯款|改\s*\d|【/.test(t)) return { intent: 'shipping', confidence: 96, reason: '含件數與品項的寄運/出貨格式' };
+  // ② 收款：需正式收款字，且不得含容器/台子回收字
+  if (PAYMENT_RE.test(t) && !COLLECT_RE.test(t)) return { intent: 'payment', confidence: 96, reason: '含正式收款關鍵字' };
+  // ③ 容器/台子回收 → 明確非收款
+  if (COLLECT_RE.test(t)) return { intent: 'collection', confidence: 92, reason: '容器/台子回收，非收款' };
+  // ④ 聊天/填充詞 → 低信心，不得建立 ERP
+  if (CHAT_FILLER_RE.test(t) || CHAT_RE.test(t) || t.length <= 2) return { intent: 'chat', confidence: 10, reason: '聊天/填充詞，非正式指令' };
+  return { intent: 'unknown', confidence: 20, reason: '無法對應正式指令格式' };
+}
+// 是否達到可建立 ERP 資料的信心門檻（>=95）。
+function intentAllowsWrite(text) { return classifyIntent(text).confidence >= 95; }
+// 除錯：寫入 ERP 前輸出 Intent 軌跡（GAS 端進 Stackdriver；測試端由 console mock 收集）。
+function logIntent(tag, text) { try { const c = classifyIntent(text); console.log('[INTENT] ' + tag + ' ' + JSON.stringify(c) + ' :: ' + String(text || '').replace(/\n/g, '⏎').slice(0, 40)); } catch (e) { } }
 function parseCommand(text) {
   text = String(text || '').trim(); let m; if (!text) return null;
   if (/^(指令表|指令|幫助|功能表)$/.test(text)) return { type: 'help' };
