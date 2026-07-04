@@ -66,6 +66,7 @@ const EXPORT_NAMES = [
   'intentAllowsWrite',
   'handleFreezerCmd',
   'freezerBalanceOf',
+  'doPost',
 ];
 
 /* ------------------------------------------------------------------ */
@@ -199,10 +200,18 @@ function createEnv() {
     },
   };
 
+  const _cacheStore = Object.create(null);
+  const _cacheObj = {
+    get(k) { return (k in _cacheStore) ? _cacheStore[k] : null; },
+    put(k, v) { _cacheStore[k] = String(v); },
+    remove(k) { delete _cacheStore[k]; },
+    getAll() { return Object.assign({}, _cacheStore); },
+    putAll(o) { Object.keys(o || {}).forEach(function (k) { _cacheStore[k] = String(o[k]); }); },
+  };
   const CacheService = {
-    getScriptCache() { return { get: () => null, put: () => {}, remove: () => {}, getAll: () => ({}), putAll: () => {} }; },
-    getUserCache() { return this.getScriptCache(); },
-    getDocumentCache() { return this.getScriptCache(); },
+    getScriptCache() { return _cacheObj; },
+    getUserCache() { return _cacheObj; },
+    getDocumentCache() { return _cacheObj; },
   };
 
   const Logger = {
