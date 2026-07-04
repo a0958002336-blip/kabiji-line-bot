@@ -64,6 +64,8 @@ const EXPORT_NAMES = [
   'recordHire',
   'classifyIntent',
   'intentAllowsWrite',
+  'handleFreezerCmd',
+  'freezerBalanceOf',
 ];
 
 /* ------------------------------------------------------------------ */
