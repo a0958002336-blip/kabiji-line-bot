@@ -46,6 +46,22 @@ const EXPORT_NAMES = [
   'isAdmin',
   'looksLikeWrite',
   'looksLikeChat',
+  // ---- 員工姓名正規化 SSOT + 各人員統計（供 run_emp_norm.js 回歸測試）----
+  'normalizeEmployeeName',
+  'stripEmpTime',
+  'empAlias',
+  'buildAliasIndex',
+  'setEmployeeAliases',
+  'setEmpAlias',
+  'attendanceStats',
+  'evaluation',
+  'dutyAll',
+  'dutyQuery',
+  'loanQuery',
+  'hireQuery',
+  'handleDuty',
+  'recordLoan',
+  'recordHire',
 ];
 
 /* ------------------------------------------------------------------ */

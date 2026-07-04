@@ -495,10 +495,11 @@ function handleEvent(event) {
     else if (m = text.match(new RegExp('^(.{1,12}?)\\s*請假' + T + '$'))) { emp = m[1]; action = '請假'; }
     if (emp === '__SELF__') {
       const dn = getDisplayName(chatId, source.userId);
-      emp = reverseBinding(dn) || dn;
+      emp = normalizeEmployeeName(reverseBinding(dn) || dn);          // SSOT：本人打卡也正規化
     } else {
       emp = emp.trim().replace(/^員工/, '');
       if (action && emp && /(我|你|他|她|大家|準備|終於|快|想|該|誰|今天|今日|現在|可以|還沒|馬上|剛|一起|幾點|有人|有沒有|要不要|先|等等|等一下)/.test(emp)) action = '';
+      emp = normalizeEmployeeName(emp);                               // SSOT：去時間(宏欸4:07→宏欸)+套別名後才寫入 ERP
     }
     if (action && emp) {
       appendAttendance(emp, action, status);
@@ -1653,27 +1654,32 @@ function extractDate(s) {
 }
 function recordHire(name, when) {
   const sheet = getSheet(SHEET_HIRE); const data = sheet.getDataRange().getValues();
-  for (let i = 1; i < data.length; i++) { if (norm(data[i][0]) === norm(name)) return { exists: true, time: String(data[i][1]) }; }
+  const _idx = buildAliasIndex(); name = normalizeEmployeeName(name, _idx);   // SSOT：入職寫入前正規化
+  for (let i = 1; i < data.length; i++) { if (normalizeEmployeeName(data[i][0], _idx) === name) return { exists: true, time: String(data[i][1]) }; }
   const t = when || nowStr(); sheet.appendRow([name, t]); return { exists: false, time: t };
 }
 function hireQuery(name) {
   const data = getSheet(SHEET_HIRE).getDataRange().getValues();
+  const _idx = buildAliasIndex();                                   // SSOT
   if (name) {
-    for (let i = 1; i < data.length; i++) { if (norm(data[i][0]).indexOf(norm(name)) !== -1) return '📅 ' + data[i][0] + ' 入職時間：\n' + data[i][1]; }
+    const target = normalizeEmployeeName(name, _idx);
+    for (let i = 1; i < data.length; i++) { if (normalizeEmployeeName(data[i][0], _idx).indexOf(target) !== -1) return '📅 ' + normalizeEmployeeName(data[i][0], _idx) + ' 入職時間：\n' + data[i][1]; }
     return '查無「' + name + '」的入職記錄。\n（打「' + name + '入職」可記錄）';
   }
   const rows = [];
-  for (let i = 1; i < data.length; i++) { if (data[i][0]) rows.push('・' + data[i][0] + '：' + data[i][1]); }
+  for (let i = 1; i < data.length; i++) { if (data[i][0]) rows.push('・' + normalizeEmployeeName(data[i][0], _idx) + '：' + data[i][1]); }
   return rows.length ? '📅 員工入職時間（' + rows.length + '）：\n' + rows.join('\n') : '目前沒有入職記錄。打「員工名入職」即可記錄。';
 }
-function recordLoan(name, type, amount, when) { getSheet(SHEET_LOAN).appendRow([when || nowStr(), name, type, amount]); }
+function recordLoan(name, type, amount, when) { getSheet(SHEET_LOAN).appendRow([when || nowStr(), normalizeEmployeeName(name), type, amount]); }   // SSOT：借支寫入前正規化
 function loanQuery(name) {
   const data = getSheet(SHEET_LOAN).getDataRange().getValues();
   if (name) {
     let net = 0; const list = []; let found = '';
+    const _idx = buildAliasIndex(); const target = normalizeEmployeeName(name, _idx);   // SSOT
     for (let i = 1; i < data.length; i++) {
-      if (norm(String(data[i][1])).indexOf(norm(name)) === -1) continue;
-      found = String(data[i][1]); const amt = Number(data[i][3]) || 0; const t = String(data[i][2]);
+      const _n = normalizeEmployeeName(data[i][1], _idx);
+      if (_n.indexOf(target) === -1) continue;
+      found = _n; const amt = Number(data[i][3]) || 0; const t = String(data[i][2]);
       const md = mdOf(data[i][0]); const ds = md ? (md + ' ') : '';
       if (t === '還') { net -= amt; list.push('　' + ds + '還 ' + amt); }
       else { net += amt; list.push('　' + ds + '借 ' + amt); }
@@ -1681,17 +1687,17 @@ function loanQuery(name) {
     if (!found) return '查無「' + name + '」的借支記錄。';
     return '💵 ' + found + ' 借支明細：\n' + list.join('\n') + '\n――――――\n目前未還：' + net + ' 元';
   }
-  const map = {}; const order = [];
-  for (let i = 1; i < data.length; i++) { const n = String(data[i][1]); if (!n) continue; if (!(n in map)) { map[n] = 0; order.push(n); } const amt = Number(data[i][3]) || 0; map[n] += (String(data[i][2]) === '還' ? -amt : amt); }
+  const map = {}; const order = []; const _idx = buildAliasIndex();   // SSOT：未還合計依正式姓名合併
+  for (let i = 1; i < data.length; i++) { const n = normalizeEmployeeName(data[i][1], _idx); if (!n) continue; if (!(n in map)) { map[n] = 0; order.push(n); } const amt = Number(data[i][3]) || 0; map[n] += (String(data[i][2]) === '還' ? -amt : amt); }
   if (!order.length) return '目前沒有借支記錄。打「員工名借金額」即可記錄。';
   let total = 0; const lines = order.map(function (n) { total += map[n]; return '・' + n + '：' + map[n] + ' 元'; });
   return '💵 員工借支未還（' + order.length + ' 人）：\n' + lines.join('\n') + '\n――――――\n合計未還：' + total + ' 元';
 }
 function loanDetailAll() {
   const data = getSheet(SHEET_LOAN).getDataRange().getValues();
-  const byName = {}; const order = [];
+  const byName = {}; const order = []; const _idx = buildAliasIndex();   // SSOT：借支明細依正式姓名合併
   for (let i = 1; i < data.length; i++) {
-    const n = String(data[i][1] || '').trim(); if (!n) continue;
+    const n = normalizeEmployeeName(data[i][1], _idx); if (!n) continue;
     if (!(n in byName)) { byName[n] = { recs: [], net: 0, borrow: 0, repay: 0 }; order.push(n); }
     const amt = Number(data[i][3]) || 0; const t = String(data[i][2]);
     const ds = mdOf(data[i][0]) || '?';
@@ -1799,14 +1805,16 @@ function resolveYM(arg) {
 }
 function dutyTotal(emp, ym) {
   const data = getSheet(SHEET_DUTY).getDataRange().getValues(); let t = 0;
-  for (let i = 1; i < data.length; i++) { if (String(data[i][1]) !== emp) continue; if (ym && ymOf(data[i][0]) !== ym) continue; t += Number(data[i][4]) || 0; }
+  const _idx = buildAliasIndex(); const target = normalizeEmployeeName(emp, _idx);   // SSOT
+  for (let i = 1; i < data.length; i++) { if (normalizeEmployeeName(data[i][1], _idx) !== target) continue; if (ym && ymOf(data[i][0]) !== ym) continue; t += Number(data[i][4]) || 0; }
   return t;
 }
 function handleDuty(text) {
   const m = text.match(/^(\S+?)\s*(?:出外勤|外勤)\s*(?:地點)?\s*[:：]?\s*(.+)$/);
   if (!m) return { count: 0 };
-  const emp = m[1].trim(); let rest = (m[2] || '').trim();
+  let emp = m[1].trim(); let rest = (m[2] || '').trim();
   if (!emp || /^(查|本月|上月|這個|當月|#)/.test(emp)) return { count: 0 };
+  emp = normalizeEmployeeName(emp);                                   // SSOT：外勤寫入前正規化姓名
   let override = null; const om = rest.match(/補貼\s*(\d+)/); if (om) { override = parseInt(om[1], 10); rest = rest.replace(om[0], '').trim(); }
   let depTime = ''; const tm = rest.match(/(\d{1,2})[:：](\d{2})/);
   if (tm) { depTime = ('0' + tm[1]).slice(-2) + ':' + tm[2]; rest = rest.replace(/\d{1,2}[:：]\d{2}\s*(?:出發|出門)?/, '').trim(); }
@@ -1822,8 +1830,9 @@ function handleDuty(text) {
 function dutyQuery(emp, monthArg) {
   const ym = resolveYM(monthArg) || thisYM();
   const data = getSheet(SHEET_DUTY).getDataRange().getValues(); const rows = []; let monthTotal = 0, allTotal = 0, anyEmp = false;
+  const _idx = buildAliasIndex(); const target = normalizeEmployeeName(emp, _idx);   // SSOT
   for (let i = 1; i < data.length; i++) {
-    if (String(data[i][1]).indexOf(emp) === -1) continue; anyEmp = true;
+    if (normalizeEmployeeName(data[i][1], _idx).indexOf(target) === -1) continue; anyEmp = true;
     const amt = Number(data[i][4]) || 0; allTotal += amt;
     if (ymOf(data[i][0]) === ym) { monthTotal += amt; rows.push('・' + ymdStr(data[i][0]) + ' ' + (data[i][2] || '') + ' 出發' + hmOf(data[i][3]) + ' → ' + amt + ' 元'); }
   }
@@ -1833,7 +1842,8 @@ function dutyQuery(emp, monthArg) {
 function dutyAll(monthArg) {
   const ym = resolveYM(monthArg) || thisYM();
   const data = getSheet(SHEET_DUTY).getDataRange().getValues(); const map = {}; const order = [];
-  for (let i = 1; i < data.length; i++) { const e = String(data[i][1]); if (!e) continue; if (ym && ymOf(data[i][0]) !== ym) continue; if (!(e in map)) { map[e] = 0; order.push(e); } map[e] += Number(data[i][4]) || 0; }
+  const _idx = buildAliasIndex();                                   // SSOT：合計依正式姓名合併同一人
+  for (let i = 1; i < data.length; i++) { const e = normalizeEmployeeName(data[i][1], _idx); if (!e) continue; if (ym && ymOf(data[i][0]) !== ym) continue; if (!(e in map)) { map[e] = 0; order.push(e); } map[e] += Number(data[i][4]) || 0; }
   if (!order.length) return '🚚 ' + ym + ' 目前沒有外勤補貼紀錄。';
   order.sort(function (a, b) { return map[b] - map[a]; });
   let sum = 0; order.forEach(function (e) { sum += map[e]; });
@@ -1841,9 +1851,10 @@ function dutyAll(monthArg) {
 }
 function dutyAllDetail() {
   const data = getSheet(SHEET_DUTY).getDataRange().getValues(); const rows = []; let total = 0;
+  const _idx = buildAliasIndex();                                   // SSOT：明細姓名顯示正式名
   for (let i = 1; i < data.length; i++) {
     if (!data[i][1]) continue; const amt = Number(data[i][4]) || 0; total += amt;
-    rows.push('・' + ymdStr(data[i][0]) + ' ' + data[i][1] + ' ' + (data[i][2] || '') + ' 出發' + hmOf(data[i][3]) + ' → ' + amt + ' 元');
+    rows.push('・' + ymdStr(data[i][0]) + ' ' + normalizeEmployeeName(data[i][1], _idx) + ' ' + (data[i][2] || '') + ' 出發' + hmOf(data[i][3]) + ' → ' + amt + ' 元');
   }
   if (!rows.length) return '目前沒有外勤補貼紀錄。';
   let out = '🚚 外勤補貼 全部紀錄（' + rows.length + ' 筆）：\n' + rows.join('\n') + '\n――――――\n總計 ' + total + ' 元';
@@ -2853,9 +2864,9 @@ function handlePlaceSet(text) {
 }
 function placeList() { const p = getPlaces(); const ks = Object.keys(p); return ks.length ? ('📍 地點代號：\n' + ks.map(function (k) { return '・' + k + ' ➜ ' + p[k]; }).join('\n')) : '目前沒有地點代號。\n設定方式：新廠=新中北路二段73號'; }
 function getResigned() { try { return JSON.parse(PROPS.getProperty('RESIGNED') || '[]'); } catch (e) { return []; } }
-function addResigned(emp) { const a = getResigned(); if (a.indexOf(emp) === -1) a.push(emp); PROPS.setProperty('RESIGNED', JSON.stringify(a)); }
-function removeResigned(emp) { let a = getResigned(); a = a.filter(function (x) { return x !== emp; }); PROPS.setProperty('RESIGNED', JSON.stringify(a)); }
-function isResigned(emp) { return getResigned().indexOf(emp) !== -1; }
+function addResigned(emp) { emp = normalizeEmployeeName(emp); const a = getResigned(); if (a.indexOf(emp) === -1) a.push(emp); PROPS.setProperty('RESIGNED', JSON.stringify(a)); }   // SSOT
+function removeResigned(emp) { const n = normalizeEmployeeName(emp); let a = getResigned(); a = a.filter(function (x) { return normalizeEmployeeName(x) !== n; }); PROPS.setProperty('RESIGNED', JSON.stringify(a)); }   // SSOT
+function isResigned(emp) { const n = normalizeEmployeeName(emp); return getResigned().some(function (x) { return normalizeEmployeeName(x) === n; }); }   // SSOT
 function deleteEmployee(emp) {
   const targets = [['出勤打卡', SHEET_ATTEND, 1], ['外勤補貼', SHEET_DUTY, 1], ['借支', SHEET_LOAN, 1], ['入職', SHEET_HIRE, 0]];
   const detail = []; let total = 0;
@@ -2895,11 +2906,47 @@ function setEvalConfig(text) {
   const c = evalConfig();
   return '✅ 已更新評比權重：\n出勤×' + c.day + '、外勤×' + c.duty + '、工作留言×' + c.work + '、廢話×' + c.chatter + '、遲到×' + c.late + '、請假×' + c.leave + '、晚下班×' + c.offlate + '（基準' + c.offbase + '點後）';
 }
-/* ---- 員工別名（把「良」正規化成「阿良」等，評比合併同一人）---- */
+/* ==========================================================================
+ * 員工姓名正規化 — 全系統唯一入口（Single Source of Truth）
+ * --------------------------------------------------------------------------
+ * 任何模組（出勤/下班/外勤/借支/入職/離職/收款/出貨/進貨/庫存/薪資/統計/查詢/
+ * AI解析/ERP寫入）在處理員工姓名前，一律先呼叫 normalizeEmployeeName()。
+ * 禁止各功能自行解析姓名，避免「良 / 阿良」「宏欸 / 宏欸4:07」被拆成多筆。
+ * 正規化步驟：① 去除被誤吃進姓名的時間（宏欸4:07 / 宏欸 4:07 → 宏欸）
+ *            ② 收斂空白  ③ 套用別名管理表（良 → 阿良）
+ * ========================================================================== */
+// ① 去時間 + 收斂空白（純字串處理，不碰別名表）
+function stripEmpTime(s) { return String(s == null ? '' : s).replace(/\s*\d{1,2}\s*[:：]\s*\d{2}\s*/g, ' ').replace(/\s+/g, ' ').trim(); }
+// 舊：扁平別名表 alias -> canonical（相容既有 #員工別名 指令與資料）
 function getEmpAlias() { try { return JSON.parse(PROPS.getProperty('EMP_ALIAS') || '{}'); } catch (e) { return {}; } }
 function setEmpAlias(alias, canonical) { const a = getEmpAlias(); a[alias] = canonical; PROPS.setProperty('EMP_ALIAS', JSON.stringify(a)); }
 function removeEmpAlias(alias) { const a = getEmpAlias(); delete a[alias]; PROPS.setProperty('EMP_ALIAS', JSON.stringify(a)); }
-function empAlias(name) { const n = String(name || '').trim(); const a = getEmpAlias(); return a[n] || n; }
+// 新：員工別名管理表 canonical -> [aliases]，例：{ "阿良":["良","阿良"], "宏欸":["宏欸","宏欸4:07"] }
+function getEmployeeAliases() { try { return JSON.parse(PROPS.getProperty('EMPLOYEE_ALIASES') || '{}'); } catch (e) { return {}; } }
+function setEmployeeAliases(map) { PROPS.setProperty('EMPLOYEE_ALIASES', JSON.stringify(map || {})); }
+// 反查索引（normalized-alias -> canonical）：合併「新管理表」與「舊扁平表」。
+// 效能：每次查詢建立一次即可；迴圈內請 hoist 後以第二參數傳入 normalizeEmployeeName。
+function buildAliasIndex() {
+  const idx = {};
+  const legacy = getEmpAlias();
+  Object.keys(legacy).forEach(function (a) { const k = stripEmpTime(a); if (k) idx[k] = String(legacy[a]).trim(); });
+  const table = getEmployeeAliases();
+  Object.keys(table).forEach(function (canon) {
+    const c = String(canon).trim(); if (!c) return;
+    idx[stripEmpTime(c)] = c;
+    (table[canon] || []).forEach(function (a) { const k = stripEmpTime(a); if (k) idx[k] = c; });
+  });
+  return idx;
+}
+// ★ 全系統唯一姓名正規化入口。idx 可選：迴圈內先 buildAliasIndex() 再逐筆傳入以維持效能。
+function normalizeEmployeeName(raw, idx) {
+  const n = stripEmpTime(raw);
+  if (!n) return n;
+  const map = idx || buildAliasIndex();
+  return map[n] || n;
+}
+// 相容既有呼叫點（speechCountMonth / evaluation 等）：一律改走 SSOT。
+function empAlias(name, idx) { return normalizeEmployeeName(name, idx); }
 function hourOf(v) {   // 取時:分的小時數（可吃 Date 物件或字串）
   let s = (v instanceof Date) ? Utilities.formatDate(v, 'Asia/Taipei', 'HH:mm') : String(v);
   let m = s.match(/(\d{1,2}):(\d{2})/);
@@ -2920,18 +2967,19 @@ function speechCountMonth(ym, groups) {
     if (!(uid in agg)) { agg[uid] = { work: 0, chatter: 0 }; gid[uid] = g; }
     if (classifyMessage(t) === '送貨') agg[uid].work++; else agg[uid].chatter++;
   }
-  const byName = {};
-  Object.keys(agg).forEach(function (uid) { const nm = empAlias(getDisplayName(gid[uid] || (groups && groups[0]) || '', uid)); if (!byName[nm]) byName[nm] = { work: 0, chatter: 0 }; byName[nm].work += agg[uid].work; byName[nm].chatter += agg[uid].chatter; });
+  const byName = {}; const _idx = buildAliasIndex();
+  Object.keys(agg).forEach(function (uid) { const nm = normalizeEmployeeName(getDisplayName(gid[uid] || (groups && groups[0]) || '', uid), _idx); if (!byName[nm]) byName[nm] = { work: 0, chatter: 0 }; byName[nm].work += agg[uid].work; byName[nm].chatter += agg[uid].chatter; });
   return byName;
 }
 function evaluation(monthArg, empFilter, groupId) {
   const ym = resolveYM(monthArg) || thisYM();
   const cf = evalConfig();
+  const _idx = buildAliasIndex();                                   // SSOT：hoist 一次供整個評比使用
   const emp = {}; const order = [];
   const ensure = function (e) { if (!(e in emp)) { emp[e] = { days: {}, on: 0, off: 0, late: 0, leave: 0, dutyCnt: 0, dutyAmt: 0, work: 0, chatter: 0, offLate: 0 }; order.push(e); } };
   const att = getSheet(SHEET_ATTEND).getDataRange().getValues();
   for (let i = 1; i < att.length; i++) {
-    const e = empAlias(String(att[i][1]).trim()); if (!e) continue; if (ymOf(att[i][0]) !== ym) continue; ensure(e);
+    const e = normalizeEmployeeName(att[i][1], _idx); if (!e) continue; if (ymOf(att[i][0]) !== ym) continue; ensure(e);
     const act = String(att[i][2]).trim(), st = String(att[i][3]).trim();
     if (act === '上班') { emp[e].on++; emp[e].days[ymdStr(att[i][0])] = 1; }
     else if (act === '下班') { emp[e].off++; emp[e].days[ymdStr(att[i][0])] = 1; const h = hourOf(att[i][0]); if (h !== null && h > cf.offbase) emp[e].offLate += (h - cf.offbase); }
@@ -2940,7 +2988,7 @@ function evaluation(monthArg, empFilter, groupId) {
     if (st === '遲到' && act !== '遲到') emp[e].late++;
   }
   const duty = getSheet(SHEET_DUTY).getDataRange().getValues();
-  for (let i = 1; i < duty.length; i++) { const e = empAlias(String(duty[i][1]).trim()); if (!e) continue; if (ymOf(duty[i][0]) !== ym) continue; ensure(e); emp[e].dutyCnt++; emp[e].dutyAmt += Number(duty[i][4]) || 0; }
+  for (let i = 1; i < duty.length; i++) { const e = normalizeEmployeeName(duty[i][1], _idx); if (!e) continue; if (ymOf(duty[i][0]) !== ym) continue; ensure(e); emp[e].dutyCnt++; emp[e].dutyAmt += Number(duty[i][4]) || 0; }
   let groups = getEvalGroups();
   if (!groups.length && groupId) groups = [groupId];
   const byName = speechCountMonth(ym, groups);
@@ -2953,7 +3001,7 @@ function evaluation(monthArg, empFilter, groupId) {
     emp[e].work = w; emp[e].chatter = c;
   });
   let list = order.filter(function (e) { return !isResigned(e); });
-  if (empFilter) { const ef = empAlias(empFilter); list = list.filter(function (e) { return e.indexOf(ef) !== -1 || ef.indexOf(e) !== -1; }); }
+  if (empFilter) { const ef = normalizeEmployeeName(empFilter, _idx); list = list.filter(function (e) { return e.indexOf(ef) !== -1 || ef.indexOf(e) !== -1; }); }
   if (!list.length) return '🏆 ' + ym + (empFilter ? ' ' + empFilter : '') + ' 沒有可評比的資料。';
   const scored = list.map(function (e) { const x = emp[e]; const d = Object.keys(x.days).length; const score = d * cf.day + x.dutyCnt * cf.duty + x.work * cf.work + x.chatter * cf.chatter + x.late * cf.late + x.leave * cf.leave + x.offLate * cf.offlate; return { e: e, d: d, x: x, score: score }; });
   scored.sort(function (a, b) { return b.score - a.score; });
@@ -2964,13 +3012,14 @@ function appendAttendance(emp, action, status) { getSheet(SHEET_ATTEND).appendRo
 function controlOverview(groupId) {
   const todayStr = Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy/MM/dd');
   const L = ['📊 中控總覽　' + todayStr + '\n――――――――――'];
+  const _idx = buildAliasIndex();                                   // SSOT：中控每日出勤/外勤名單合併同一人
   try { const d = getSheet(SHEET_SHIP).getDataRange().getValues(); let c = 0, q = 0; for (let i = 1; i < d.length; i++) { if (ymdStr(d[i][0]) === todayStr) { c++; q += Number(d[i][5]) || 0; } } L.push('🚚 今日寄運：' + c + ' 筆／' + q + ' 件'); } catch (e) { }
   try { const d = getSheet(SHEET_RACK).getDataRange().getValues(); const net = {}; for (let i = 1; i < d.length; i++) { const k = String(d[i][5]) + '｜' + String(d[i][3]); const qq = Number(d[i][4]) || 0; net[k] = (net[k] || 0) + (String(d[i][2]) === '出庫' ? qq : -qq); } let t = 0, p = 0; Object.keys(net).forEach(function (k) { if (net[k] > 0) { t += net[k]; p++; } }); L.push('🔧 鐵架在外：' + t + ' 支（' + p + ' 處未收）'); } catch (e) { }
   try { const d = getSheet(SHEET_TAIZI).getDataRange().getValues(); const net = {}; for (let i = 1; i < d.length; i++) { const k = String(d[i][5]) + '｜' + String(d[i][3]); const qq = Number(d[i][4]) || 0; net[k] = (net[k] || 0) + (String(d[i][2]) === '出庫' ? qq : -qq); } let t = 0; Object.keys(net).forEach(function (k) { if (net[k] > 0) t += net[k]; }); L.push('🥡 台子在外：' + t + ' 個'); } catch (e) { }
   try { const d = getSheet(SHEET_RETURN).getDataRange().getValues(); let c = 0; for (let i = 1; i < d.length; i++) if (ymdStr(d[i][0]) === todayStr) c++; L.push('↩️ 今日退貨：' + c + ' 筆'); } catch (e) { }
   try { const d = getSheet(SHEET_FINANCE).getDataRange().getValues(); let chg = 0, loss = 0, remit = 0; for (let i = 1; i < d.length; i++) { if (ymdStr(d[i][0]) !== todayStr) continue; const ty = String(d[i][2]); if (ty === '改價') chg++; else if (ty === '損耗') loss++; else if (ty === '匯款') remit++; } L.push('💰 今日 改價 ' + chg + '／損耗 ' + loss + '／匯款 ' + remit); } catch (e) { }
-  try { const d = getSheet(SHEET_ATTEND).getDataRange().getValues(); const onSet = {}; const on = [], leave = [], late = []; for (let i = 1; i < d.length; i++) { if (ymdStr(d[i][0]) !== todayStr) continue; const e = String(d[i][1]).trim(); const act = String(d[i][2]).trim(), st = String(d[i][3]).trim(); if (act === '上班' && !onSet[e]) { onSet[e] = 1; on.push(e); } if (act === '請假') leave.push(e); if (act === '遲到' || st === '遲到') late.push(e); } let s = '🕒 出勤：上班 ' + on.length + ' 人'; if (late.length) s += '｜遲到 ' + late.join('、'); if (leave.length) s += '｜請假 ' + leave.join('、'); L.push(s); } catch (e) { }
-  try { const d = getSheet(SHEET_DUTY).getDataRange().getValues(); const rows = []; let amt = 0; for (let i = 1; i < d.length; i++) { if (ymdStr(d[i][0]) !== todayStr) continue; rows.push(String(d[i][1]) + '(' + (d[i][2] || '') + ')'); amt += Number(d[i][4]) || 0; } L.push(rows.length ? ('📍 今日外勤：' + rows.join('、') + '　加給 ' + amt + ' 元') : '📍 今日外勤：無'); } catch (e) { }
+  try { const d = getSheet(SHEET_ATTEND).getDataRange().getValues(); const onSet = {}; const on = [], leave = [], late = []; for (let i = 1; i < d.length; i++) { if (ymdStr(d[i][0]) !== todayStr) continue; const e = normalizeEmployeeName(d[i][1], _idx); const act = String(d[i][2]).trim(), st = String(d[i][3]).trim(); if (act === '上班' && !onSet[e]) { onSet[e] = 1; on.push(e); } if (act === '請假') leave.push(e); if (act === '遲到' || st === '遲到') late.push(e); } let s = '🕒 出勤：上班 ' + on.length + ' 人'; if (late.length) s += '｜遲到 ' + late.join('、'); if (leave.length) s += '｜請假 ' + leave.join('、'); L.push(s); } catch (e) { }
+  try { const d = getSheet(SHEET_DUTY).getDataRange().getValues(); const rows = []; let amt = 0; for (let i = 1; i < d.length; i++) { if (ymdStr(d[i][0]) !== todayStr) continue; rows.push(normalizeEmployeeName(d[i][1], _idx) + '(' + (d[i][2] || '') + ')'); amt += Number(d[i][4]) || 0; } L.push(rows.length ? ('📍 今日外勤：' + rows.join('、') + '　加給 ' + amt + ' 元') : '📍 今日外勤：無'); } catch (e) { }
   try { const d = msgTail(5000); let c = 0; const ppl = {}; for (let i = 1; i < d.length; i++) { if (ymdStr(d[i][0]) !== todayStr) continue; if (groupId && String(d[i][3]) !== groupId) continue; const t = String(d[i][1]); if (/^\[(貼圖|圖片|影片|語音|檔案|位置)\]$/.test(t)) continue; c++; ppl[String(d[i][2])] = 1; } L.push('💬 今日發言：' + c + ' 則（' + Object.keys(ppl).length + ' 人）'); } catch (e) { }
   L.push('――――――――――\n（綜合評比→打「綜合評比」；明細→各別查詢指令）');
   return L.join('\n');
@@ -2979,9 +3028,11 @@ function attendanceStats(monthArg, empFilter) {
   const ym = resolveYM(monthArg) || thisYM();
   const data = getSheet(SHEET_ATTEND).getDataRange().getValues();
   const stat = {}; const order = []; const days = {};
+  const _idx = buildAliasIndex();                                   // SSOT：hoist 一次，迴圈內零重複解析
+  const _filter = empFilter ? normalizeEmployeeName(empFilter, _idx) : '';
   for (let i = 1; i < data.length; i++) {
-    const emp = String(data[i][1]).trim(); if (!emp) continue;
-    if (empFilter && emp.indexOf(empFilter) === -1) continue;
+    const emp = normalizeEmployeeName(data[i][1], _idx); if (!emp) continue;   // 良/阿良、宏欸4:07 → 正式姓名
+    if (_filter && emp.indexOf(_filter) === -1) continue;
     if (ym && ymOf(data[i][0]) !== ym) continue;
     if (!(emp in stat)) { stat[emp] = { on: 0, off: 0, late: 0, leave: 0 }; order.push(emp); days[emp] = {}; }
     const act = String(data[i][2]).trim(); const st = String(data[i][3]).trim();
