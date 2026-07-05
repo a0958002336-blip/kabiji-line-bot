@@ -67,6 +67,8 @@ const EXPORT_NAMES = [
   'handleFreezerCmd',
   'freezerBalanceOf',
   'doPost',
+  'isWholeIce',
+  'isValidEmpName',
 ];
 
 /* ------------------------------------------------------------------ */

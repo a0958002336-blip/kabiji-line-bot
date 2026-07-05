@@ -15,6 +15,7 @@ const SUITES = [
   'run_task8.js',         // Task8 去重/fail-closed
   'run_emp_norm.js',      // Task6 員工正規化
   'run_intent_guard.js',  // Task3/4/9 意圖守衛
+  'run_task9.js',         // Task9 誤判補強
   'run_outbound.js',      // Task5 出庫/庫存
 ];
 
