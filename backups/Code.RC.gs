@@ -19,6 +19,7 @@ const SHEET_LOAN     = '員工借支';
 const SHEET_RETURN   = '退貨紀錄';
 const SHEET_TARE     = '空車重量';
 const SHEET_DUTY     = '外勤補貼';
+const SHEET_RECEIVABLE = '待收款';   // Task4 收款/未收款（含軟刪除稽核）
 const FONT_SIZE = 18;
 
 const PROPS = PropertiesService.getScriptProperties();
@@ -570,6 +571,35 @@ function handleEvent(event) {
   if (isWholeIce(text) && !/出庫|入庫|【|改\s*\d|匯款|損耗|扣除/.test(text)) {
     const ice = handleFreezerIceBatch(text);
     if (ice.count > 0) { if (!quiet()) replyToLine(replyToken, ice.reply); return; }
+  }
+
+  /* ---- 待收款 / 收款追蹤（Task4）：查詢 / 結案 / 取消(軟刪) / 自動偵測建立 ---- */
+  if (/^#(待收款|未收款|今日待收款|今日收款)\s*$/.test(text)) { replyToLine(replyToken, receivableQuery(/今日/.test(text))); return; }
+  if (/^#收款明細\s*$/.test(text)) { replyToLine(replyToken, receivableDetail()); return; }
+  if (/^#已收\s+/.test(text)) {
+    const key = text.replace(/^#已收\s+/, '').trim();
+    const r = receivableClose(key, getDisplayName(chatId, source.userId));
+    replyToLine(replyToken, r ? ('✅ 已收款結案：' + r.customer + (r.supplier ? '／' + r.supplier : '') + '｜' + r.item + '｜' + r.amount + ' 元') : ('查無「' + key + '」的未收款。'));
+    return;
+  }
+  if (/^#取消收款\s+/.test(text)) {
+    const body = text.replace(/^#取消收款\s+/, '').trim();
+    const mkey = body.match(/^(\S+)\s*(.*)$/); const key = mkey ? mkey[1] : body; const reason = mkey ? mkey[2].trim() : '';
+    const r = receivableCancel(key, getDisplayName(chatId, source.userId), reason);
+    replyToLine(replyToken, r ? ('🗑️ 已取消收款（保留紀錄/軟刪除）：' + r.customer + '｜' + r.item + '｜' + r.amount + ' 元' + (reason ? '｜原因 ' + reason : '')) : ('查無「' + key + '」的未收款。'));
+    return;
+  }
+  // 自動偵測：含正式收款關鍵字 + 可解析金額 → 建立【未收】（fail-closed：無金額只提示不建立）
+  {
+    const rd = recvDetect(text);
+    if (rd) {
+      if (rd.needAmount) { replyToLine(replyToken, '⚠️ 偵測到收款意圖但讀不到金額，請用格式：客戶 品項 要收款 6800（或 6800元）。'); return; }
+      logIntent('收款建立', text);
+      const cr = recvCreate(rd, (source.groupId || source.roomId || ''), (event.message && event.message.id) || '', getDisplayName(chatId, source.userId), text);
+      if (cr.dup) { replyToLine(replyToken, '⚠️ 這筆收款已存在（24小時內同客戶同金額同品項或同訊息），未重複建立。'); return; }
+      replyToLine(replyToken, '💰 已建立待收款：' + (rd.customer || '(未填客戶)') + (rd.supplier ? '／' + rd.supplier : '') + '｜' + (rd.item || '') + '｜' + rd.amount + ' 元\n（收款人待指定；收款完成請打「#已收 ' + (rd.customer || '客戶') + '」）');
+      return;
+    }
   }
 
   /* ---- 寄運出貨單（含鐵架(鐵架*N)漏記修正）---- */
@@ -2935,6 +2965,105 @@ function appendRackRecord(action, rackId, qty, customer, isIn) {
 }
 function appendFinanceRecord(customer, type, amount, content) { getSheet(SHEET_FINANCE).appendRow([nowStr(), customer, type, amount, content, '']); }
 
+/* ==========================================================================
+ * 待收款 / 收款追蹤（Task4）— 於 卡比集機器人_repo 全新實作（未搬 kabiji-bot 程式碼）
+ * 欄位(0-based)：0建立時間 1日期 2客戶 3供應商 4品項 5金額 6備註 7狀態 8建立者
+ *   9收款人 10收款時間 11結案時間 12來源群組 13來源訊息ID 14原文 15刪除時間 16刪除者 17取消原因
+ * 狀態：未收 / 已收 / 取消 / 異常。取消＝軟刪除（不刪列，填 15/16/17）。
+ * ========================================================================== */
+var RECV_KW = /(要收錢|要收款|收款|代收|請收|需收)/;                 // 移除裸「要收」「收」
+var RECV_EQUIP = /(收台|台回來|空籃|空籃回收|籃子回收|棧板回收)/;    // 器材回收，永不進收款
+function recvSheet() { return getSheet(SHEET_RECEIVABLE); }
+function recvNowMs() { try { return new Date().getTime(); } catch (e) { return 0; } }
+function recvAgeHours(createdAt) { try { const d = new Date(String(createdAt).replace(/-/g, '/')); const ms = recvNowMs() - d.getTime(); return isNaN(ms) ? null : ms / 3600000; } catch (e) { return null; } }
+function recvParseAmount(text) {
+  const t = String(text);
+  let m = t.match(/(?:要收錢|要收款|收款|代收|請收|需收)\s*([\d,]+)/);
+  if (m && /\d/.test(m[1])) return parseInt(m[1].replace(/,/g, ''), 10);
+  m = t.match(/([\d,]+)\s*元/);
+  if (m) return parseInt(m[1].replace(/,/g, ''), 10);
+  return null;
+}
+// 偵測收款意圖；回 null=非收款；{needAmount:true}=有關鍵字無金額（提示不建立）；否則回解析結構。
+function recvDetect(text) {
+  const t = String(text || '').trim();
+  if (!t) return null;
+  if (RECV_EQUIP.test(t)) return null;   // P0-1：含收台/空籃/棧板回收 → 器材收回，永不進收款（即使含「需收」等字）
+  if (!RECV_KW.test(t)) return null;
+  const amount = recvParseAmount(t);
+  if (!(amount > 0)) return { needAmount: true };
+  const lines = t.split('\n').map(function (l) { return l.trim(); }).filter(Boolean);
+  let customer = '', rest = [];
+  lines.forEach(function (ln, i) { if (i === 0 && /^\d{2,}$/.test(ln)) customer = ln; else rest.push(ln); });
+  let body = rest.join(' ');
+  let note = ''; const nm = body.match(/[（(]([^)）]*)[)）]/); if (nm) { note = nm[1].trim(); body = body.replace(nm[0], ' '); }
+  let supplier = ''; const sm = body.match(/^\s*([一-龥]{2,6})(?=\s|$|\d)/); if (sm) { supplier = sm[1]; body = body.slice(body.indexOf(sm[1]) + sm[1].length); }
+  const item = body.replace(/(?:要收錢|要收款|收款|代收|請收|需收)\s*[\d,]*\s*元?/g, ' ').replace(/[\d,]+\s*元/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!customer && supplier) customer = supplier;   // 無數字客戶 → 開頭中文名當客戶
+  return { customer: customer, supplier: supplier, item: item, amount: amount, note: note };
+}
+// 建立【未收】；去重：① 同 sourceMessageId ② 同客戶+同金額+同品項且非取消且 24h 內。
+function recvCreate(p, groupId, messageId, byUser, rawText) {
+  const sheet = recvSheet(); const data = sheet.getDataRange().getValues();
+  if (messageId) { for (let i = 1; i < data.length; i++) { if (String(data[i][13]) && String(data[i][13]) === String(messageId)) return { dup: true }; } }
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][7]) === '取消' || data[i][15]) continue;
+    if (String(data[i][2]) === String(p.customer) && (Number(data[i][5]) || 0) === p.amount && String(data[i][4]) === String(p.item)) {
+      const age = recvAgeHours(data[i][0]);
+      if (age !== null && age <= 24) return { dup: true };   // 僅 24h 內視為重複，避免漏掉隔日真實重複交易
+    }
+  }
+  const lock = acquireLock(5000);
+  try { sheet.appendRow([nowStr(), todayYMD(), p.customer, p.supplier, p.item, p.amount, p.note, '未收', normalizeEmployeeName(byUser || ''), '', '', '', groupId || '', messageId || '', rawText || '', '', '', '']); }
+  finally { lock.releaseLock(); }
+  return { created: true, p: p };
+}
+function todayYMD() { return Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy/MM/dd'); }
+// 找最新一筆「未收且未軟刪」且 客戶或供應商 命中 key 的列號（1-based，含表頭）。
+function recvMatchLatest(key) {
+  const data = recvSheet().getDataRange().getValues(); const k = String(key).trim(); let found = -1;
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][7]) !== '未收' || data[i][15]) continue;
+    if (String(data[i][2]) === k || String(data[i][3]) === k || String(data[i][2]).indexOf(k) !== -1 || String(data[i][3]).indexOf(k) !== -1) found = i + 1;
+  }
+  return found;
+}
+function recvUpdateRow(rowNum, arr) { recvSheet().getRange(rowNum, 1, 1, arr.length).setValues([arr]); }
+function receivableClose(key, byUser) {
+  const rowNum = recvMatchLatest(key); if (rowNum < 0) return null;
+  const arr = recvSheet().getRange(rowNum, 1, 1, 18).getValues()[0];
+  arr[7] = '已收'; arr[9] = normalizeEmployeeName(byUser || arr[9] || ''); arr[10] = nowStr(); arr[11] = nowStr();
+  recvUpdateRow(rowNum, arr);
+  return { customer: arr[2], supplier: arr[3], item: arr[4], amount: arr[5] };
+}
+function receivableCancel(key, byUser, reason) {
+  const rowNum = recvMatchLatest(key); if (rowNum < 0) return null;
+  const arr = recvSheet().getRange(rowNum, 1, 1, 18).getValues()[0];
+  arr[7] = '取消'; arr[15] = nowStr(); arr[16] = normalizeEmployeeName(byUser || ''); arr[17] = String(reason || '').trim();   // 軟刪除，保留列與稽核
+  recvUpdateRow(rowNum, arr);
+  return { customer: arr[2], supplier: arr[3], item: arr[4], amount: arr[5] };
+}
+function receivableQuery(todayOnly) {
+  const data = recvSheet().getDataRange().getValues(); const rows = []; let total = 0; const today = todayYMD();
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][7]) !== '未收' || data[i][15]) continue;
+    if (todayOnly && ymdStr(data[i][0]) !== today) continue;
+    const amt = Number(data[i][5]) || 0; total += amt;
+    rows.push('・' + (data[i][2] || '') + (data[i][3] ? '／' + data[i][3] : '') + '｜' + (data[i][4] || '') + '｜' + amt + ' 元' + (data[i][9] ? '｜收款人 ' + data[i][9] : ''));
+  }
+  if (!rows.length) return '📋 目前沒有未收款。';
+  return '📋 未收款清單' + (todayOnly ? '（今日）' : '') + '（' + rows.length + ' 筆）：\n' + rows.join('\n') + '\n――――――\n合計未收：' + total + ' 元';
+}
+function receivableDetail() {
+  const data = recvSheet().getDataRange().getValues(); const rows = [];
+  for (let i = 1; i < data.length; i++) {
+    const st = String(data[i][7]); const tag = st === '取消' ? '❌取消' : (st === '已收' ? '✅已收' : '🔵未收');
+    rows.push(tag + '｜' + (data[i][2] || '') + '｜' + (data[i][4] || '') + '｜' + (Number(data[i][5]) || 0) + ' 元' + (st === '已收' && data[i][9] ? '｜收款人 ' + data[i][9] : '') + (st === '取消' && data[i][17] ? '｜原因 ' + data[i][17] : ''));
+  }
+  if (!rows.length) return '📋 目前沒有收款紀錄。';
+  return '📋 收款明細（全部 ' + rows.length + ' 筆）：\n' + rows.join('\n');
+}
+
 /* ========================== 【綁定 / 地點 / 離職 / 評比】 ========================== */
 function getBindings() { try { return JSON.parse(PROPS.getProperty('EMP_BINDINGS') || '{}'); } catch (e) { return {}; } }
 function setBinding(emp, name) { const b = getBindings(); b[emp] = name; PROPS.setProperty('EMP_BINDINGS', JSON.stringify(b)); }
@@ -3316,6 +3445,7 @@ function headerFor(name) {
   if (name === SHEET_RETURN)  return ['時間', '客戶', '品名', '數量', '單位'];
   if (name === SHEET_TARE)    return ['車牌', '空車重量', '名稱', '更新時間'];
   if (name === SHEET_DUTY)    return ['時間', '員工', '地點', '出發時間', '補貼', '備註'];
+  if (name === SHEET_RECEIVABLE) return ['建立時間', '日期', '客戶', '供應商', '品項', '金額', '備註', '狀態', '建立者', '收款人', '收款時間', '結案時間', '來源群組', '來源訊息ID', '原文', '刪除時間', '刪除者', '取消原因'];
   return ['時間', '客戶', '類型', '金額', '內容', '回報人'];
 }
 function formatSheet(sheet, numCols) {

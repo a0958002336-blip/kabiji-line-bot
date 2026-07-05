@@ -18,3 +18,10 @@
 
 ## Task 11+12
 - **D11.1 更新 run_emp_norm 既有斷言（非弱化）**：Task11 依 spec 將 attendanceStats/evaluation 輸出由舊「【姓名】…下班N」改為新簡表「姓名｜出勤｜遲到｜請假｜全勤」。run_emp_norm 原本斷言舊格式字串，格式已合法變更，故將其斷言改對新格式；**合併驗證意圖完全保留**（仍驗證良/阿良、宏欸系列合併為單一正名、數字為合計）。依鐵律 rule 6 於此記錄理由。未刪除任何測試案例，項數不變。
+
+## Task 4 收款/未收款（決策 D1）
+- **D4.1 採 kabiji-bot schema、於 _repo 全新實作**：使用者裁示採 kabiji-bot 的欄位/狀態設計但不搬程式碼。新分頁「待收款」18 欄＝kabiji-bot v2 的 15 欄（供應商版，非 orderNo）＋本任務要求的軟刪除稽核 3 欄 deleted_at/deleted_by/reason。
+- **D4.2 簡化收款人流程（使用者同意）**：偵測到即建立【未收】(collectedBy 空)，不做 kabiji-bot 的「先問誰收款再建」pending 對話。理由：少一個對話狀態＝更少誤觸、更 fail-closed、更易測。收款人於 #已收 時記發話者。
+- **D4.3 器材回收無條件否決收款（P0-1）**：`recvDetect` 一旦命中 收台/台回來/空籃/棧板回收 即 return null，**即使含「需收」等 RECV_KW 字**（「需收台回來」的「需收」會誤命中 RECV_KW）。此為修 [Task4] 首次跑測時 intent_guard D1 轉紅的根因；已加回歸案 2d。
+- **D4.4 去重雙軌 + 24h 窗（使用者調整）**：① sourceMessageId 完全去重（不限時間）；② 同客戶+金額+品項且非取消，**僅 24 小時內**視為重複。理由：客戶隔日的真實重複交易不得被誤判去重而漏帳。
+- **D4.5 取消＝軟刪除**：#取消收款 不刪列，改 status=取消 並填 deleted_at/deleted_by/reason，稽核可追蹤（呼應 Task8「取消保留 Log」）。

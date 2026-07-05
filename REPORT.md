@@ -1,8 +1,9 @@
 # Release Candidate 回報 — 卡比集機器人
 
-- 分支：`develop`　最新 commit：**`6cd2072`**（RC tag：`rc-1`）
+- 分支：`develop`　最新 commit：**`68359ee`**（RC tag：`rc-2`；前一版 `rc-1`=6cd2072）
 - 備份/回滾點：tag `before-refactor`(768caba)、`before-all`(42a59ff)、`Code.gs.backup-original`、`backups/Code.Task*.gs`
-- runTests()：**135/135 全綠**（另 run.js 既有 D4/D6 待決策 RED，非回歸）
+- runTests()：**161/161 全綠**（另 run.js 既有 D4/D6 待決策 RED，非回歸）
+- 更新（rc-2）：Task 4 收款/未收款模組完成（26 測試）。
 
 ---
 
@@ -14,7 +15,7 @@
 | Task 1 安全修補 | ✅ 完成 | 老闆閘門、#註冊老闆防搶注、#轉移老闆 |
 | Task 2 權限層重排 | 🟡 部分 | 權限閘門既有且正確；整段四層重排延後（風險）→ KNOWN_ISSUES |
 | Task 3 意圖層 | 🟡 部分 | classifyIntent + 驗收案例全過；switch 單一分派整段重寫延後 |
-| Task 4 收款隔離 | ⏸️ 延後 | 收款模組現行**不存在**，屬新功能（需決策 D1）→ KNOWN_ISSUES |
+| Task 4 收款隔離 | ✅ 完成(rc-2) | 決策 D1 後於 _repo 全新建收款/未收款模組：偵測建立→已收→取消軟刪除+Audit；26 測試 |
 | Task 5 出庫/庫存 | 🟡 部分 | 出庫回歸(17)+數字客戶白名單完成；全面加鎖/統一改單入口延後 |
 | Task 6 員工別名統計 | ✅ 核心完成 | SSOT 讀寫全套用+查詢合併+外勤明細含日期；migrateEmpAlias 工具延後 |
 | Task 7 回覆防護 | ✅ 完成 | safeReply 分則/截斷、非200記錄、外勤未填地點 |
