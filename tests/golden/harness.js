@@ -69,6 +69,8 @@ const EXPORT_NAMES = [
   'doPost',
   'isWholeIce',
   'isValidEmpName',
+  'splitForLine',
+  'safeReply',
 ];
 
 /* ------------------------------------------------------------------ */
