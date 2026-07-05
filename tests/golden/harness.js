@@ -71,6 +71,9 @@ const EXPORT_NAMES = [
   'isValidEmpName',
   'splitForLine',
   'safeReply',
+  'recvDetect',
+  'receivableQuery',
+  'receivableDetail',
 ];
 
 /* ------------------------------------------------------------------ */

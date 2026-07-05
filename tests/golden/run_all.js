@@ -18,6 +18,7 @@ const SUITES = [
   'run_task9.js',         // Task9 誤判補強
   'run_task7.js',         // Task7 回覆防護/未填地點
   'run_stats_format.js',  // Task11+12 統計輸出格式
+  'run_receivable.js',    // Task4 收款/未收款
   'run_outbound.js',      // Task5 出庫/庫存
 ];
 
