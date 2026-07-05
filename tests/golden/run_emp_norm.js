@@ -44,16 +44,16 @@ function withAliases(env) {
     ['2026/06/12 18:00', '宏欸 4:07', '下班', '', ''],
   ]);
   const r = env.fns.attendanceStats(YM);
-  check('1a 出現【阿良】', r.indexOf('【阿良】') !== -1, r);
-  check('1b 不得出現【良】(單獨)', r.indexOf('【良】') === -1, r);
-  check('1c 阿良 下班合併=4', /【阿良】[\s\S]*?下班 4/.test(r), r);
-  check('1d 阿良 出勤天數=4', /【阿良】[\s\S]*?出勤 4 天/.test(r), r);
-  check('1e 阿良 遲到=1', /【阿良】[\s\S]*?遲到 1 次/.test(r), r);
-  check('1f 出現【宏欸】', r.indexOf('【宏欸】') !== -1, r);
-  check('1g 宏欸 下班合併=3', /【宏欸】[\s\S]*?下班 3/.test(r), r);
+  // 註：Task11 改為簡表格式「姓名｜出勤｜遲到｜請假｜全勤」，故斷言改對新格式（合併驗證意圖不變，見 DECISIONS D11.1）
+  check('1a 出現阿良(合併)', /阿良｜/.test(r), r);
+  check('1b 不得出現單獨「良｜」', !/\n良｜/.test(r), r);
+  check('1c/d 阿良 出勤天數合併=4', /阿良｜4天/.test(r), r);
+  check('1e 阿良 遲到=1', /阿良｜4天｜1｜/.test(r), r);
+  check('1f 出現宏欸(合併)', /宏欸｜/.test(r), r);
+  check('1g 宏欸 出勤天數合併=3', /宏欸｜3天/.test(r), r);
   check('1h 統計不得殘留時間字串 4:07', r.indexOf('4:07') === -1, r);
-  check('1i 宏欸只出現一次', (r.match(/【宏欸】/g) || []).length === 1, r);
-  check('1j 阿良只出現一次', (r.match(/【阿良】/g) || []).length === 1, r);
+  check('1i 宏欸只出現一次', (r.match(/宏欸/g) || []).length === 1, r);
+  check('1j 阿良只出現一次', (r.match(/阿良/g) || []).length === 1, r);
 })();
 
 /* ---------- 2. 查單人出勤統計，須包含別名資料 ---------- */
@@ -65,8 +65,8 @@ function withAliases(env) {
     ['2026/06/06 18:00', '阿良', '下班', '', ''],
   ]);
   const r = env.fns.attendanceStats(YM, '阿良');   // 查阿良 → 應含「良」的紀錄
-  check('2a 查阿良含別名紀錄 下班=3', /下班 3/.test(r), r);
-  check('2b 查阿良不出現【良】單獨', r.indexOf('【良】') === -1, r);
+  check('2a 查阿良含別名紀錄 出勤=3天', /阿良｜3天/.test(r), r);
+  check('2b 查阿良不出現單獨「良｜」', !/\n良｜/.test(r), r);
 })();
 
 /* ---------- 3. 外勤補貼：合計/明細依正式姓名合併 ---------- */
@@ -94,10 +94,10 @@ function withAliases(env) {
     ['2026/06/06 18:00', '阿良', '下班', '', ''],
   ]);
   seed(env, '外勤補貼', [['2026/06/03 18:19', '良', '台北', '18:19', 500, '']]);
-  const r = env.fns.evaluation(YM);
-  check('4a 評比出現【阿良】', r.indexOf('【阿良】') !== -1, r);
-  check('4b 評比不出現【良】單獨', r.indexOf('【良】') === -1, r);
-  check('4c 評比阿良只一次', (r.match(/【阿良】/g) || []).length === 1, r);
+  const r = env.fns.evaluation(YM);   // Task12 簡表：名次｜姓名｜評分｜出勤｜外勤｜遲到
+  check('4a 評比出現阿良', /｜阿良｜/.test(r), r);
+  check('4b 評比不出現單獨「｜良｜」', !/｜良｜/.test(r), r);
+  check('4c 評比阿良只一次', (r.match(/阿良/g) || []).length === 1, r);
 })();
 
 /* ---------- 5. 借支：未還合計依正式姓名合併 ---------- */
