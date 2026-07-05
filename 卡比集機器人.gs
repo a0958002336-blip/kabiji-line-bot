@@ -972,8 +972,9 @@ function parseShipping(text) {
       const wm = line.match(/寄\s*[車運]\s*([^\s)）]+)/) || line.match(/寄\s*([^\s)）]+)\s*$/);
       logistics = wm ? wm[1] : '';
       const _cand = line.replace(/[\(（]?\s*寄\s*[車運到去]?\s*[^\s)）]+\s*[）)]?/, '').replace(/自己載|自取/g, '').replace(/[\(（）\)]/g, '').trim();
-      // Bug1/R1.1：客戶抬頭若為純數字且該行無物流關鍵字（寄）→ 不是客戶、不建立寄運（例：1828 一般交易不得誤記為寄運）
-      customer = (/^\d+$/.test(_cand) && !/寄/.test(line)) ? '' : _cand;
+      // Bug1/R1.1：純數字抬頭且該行無「寄」→ 預設不建寄運（1828 一般交易誤記防呆）；
+      // Task5：但若為既有數字客戶白名單（如 3088）則放行。
+      customer = (/^\d+$/.test(_cand) && !/寄/.test(line) && !isKnownShipCustomer(_cand)) ? '' : _cand;
     }
   }
   if (msgLogistics) records.forEach(function (r) { if (!r.logistics) r.logistics = msgLogistics; });
@@ -1205,6 +1206,13 @@ function shippingPull(key, dateArg) {
   return out;
 }
 // 已知寄運客戶名（今天寄運資料的客戶 + 物流商客戶名單），長的先比，供無冒號時辨識客戶
+// Task5：既有數字客戶白名單（附錄B保底）+ 動態 knownShipCustomers。純數字抬頭僅白名單內放行。
+var SHIP_NUM_WHITELIST = ['3088', '6986', '6959', '8887', '296', '927', '243', '918', '342', '1555', '7818', '5859', '6869', '9020'];
+function isKnownShipCustomer(name) {
+  const n = String(name == null ? '' : name).trim(); if (!n) return false;
+  if (SHIP_NUM_WHITELIST.indexOf(n) !== -1) return true;
+  try { return knownShipCustomers().indexOf(n) !== -1; } catch (e) { return false; }
+}
 function knownShipCustomers() {
   const set = {}; const arr = [];
   try { const d = getSheet(SHEET_SHIP).getDataRange().getValues(); for (let i = 1; i < d.length; i++) { const c = String(d[i][1] || '').trim(); if (c && !set[c]) { set[c] = 1; arr.push(c); } } } catch (e) { }

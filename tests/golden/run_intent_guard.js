@@ -85,6 +85,16 @@ function totalWrites(w) { return Object.keys(w).reduce(function (a, k) { return 
   check('F1 正式寄運單 → 硬攔放行、建立 1 筆', ok.writes['寄運資料'] === 1, JSON.stringify(ok.writes));
 })();
 
+/* ---------- G. Task5 數字客戶白名單 ---------- */
+(function () {
+  const w = drive('3088\n南瓜 30件');   // 3088 為白名單數字客戶（無「寄」也放行）
+  check('G1 白名單數字客戶3088 → 建立寄運', w.writes['寄運資料'] === 1, JSON.stringify(w.writes));
+  const b1 = drive('1828\n南瓜 30件');   // 1828 非白名單 → 擋
+  check('G2 非白名單數字1828 → 不建立寄運', !b1.writes['寄運資料'], JSON.stringify(b1.writes));
+  const b2 = drive('1828\n50件');
+  check('G3 「1828⏎50件」 → 不寫入', totalWrites(b2.writes) === 0, JSON.stringify(b2.writes));
+})();
+
 /* ---------- 報告 ---------- */
 console.log('\n========== Intent Guard 回歸測試（P0）==========\n');
 console.log(out.join('\n'));
