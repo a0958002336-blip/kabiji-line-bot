@@ -1,9 +1,11 @@
 # Release Candidate 回報 — 卡比集機器人
 
-- 分支：`develop`　最新 commit：**`68359ee`**（RC tag：`rc-2`；前一版 `rc-1`=6cd2072）
+- 分支：`develop`　最新 commit：**`cbb01a6`**（RC tag：`rc-2`；前一版 `rc-1`=6cd2072）
 - 備份/回滾點：tag `before-refactor`(768caba)、`before-all`(42a59ff)、`Code.gs.backup-original`、`backups/Code.Task*.gs`
-- runTests()：**161/161 全綠**（另 run.js 既有 D4/D6 待決策 RED，非回歸）
-- 更新（rc-2）：Task 4 收款/未收款模組完成（26 測試）。
+- runTests()：**162/162 全綠**（`node tests/golden/run_all.js`；另 run.js 既有 D4/D6 待決策 RED，非回歸）
+- 部署文件：`docs/部署手冊.md`（非工程師版）+ `docs/RC_回歸測試清單_v2.58.md`（上線後 LINE 快篩 8 項）
+- 更新（rc-2）：Task 4 收款/未收款模組完成（26 測試）；#設定外勤補貼 補 isAdmin。
+- **#2 Approval Workflow：依決策移出任務清單（未來另案），本輪不做。**
 
 ---
 
@@ -33,20 +35,22 @@
 **回覆（Task7）**：`splitForLine`/`safeReply`、`replyToLine` 非200記錄、`handleDuty` 地點可選。
 **統計格式（Task11+12）**：`attendanceStats`/`evaluation` 簡表+明細渲染（邏輯不動）。
 
-## 3. runTests() 最終輸出
+## 3. runTests() 最終輸出（`node tests/golden/run_all.js`）
 ```
-✅ run_security.js  17   ✅ run_task8.js  6    ✅ run_emp_norm.js  31
+✅ run_security.js 18  ✅ run_task8.js 6   ✅ run_emp_norm.js 31
 ✅ run_intent_guard.js 34  ✅ run_task9.js 11  ✅ run_task7.js 9
-✅ run_stats_format.js 10  ✅ run_outbound.js 17
-總計：135/135 通過。（run.js 既有 D4/D6 RED 非回歸）
+✅ run_stats_format.js 10  ✅ run_receivable.js 26  ✅ run_outbound.js 17
+總計：162/162 通過。（run.js 既有 D4/D6 RED 非回歸）
 ```
 
 ## 4. 最新 commit hash
-`6cd2072`（tag `rc-1`）
+`cbb01a6`（tag `rc-2`）
 
-## 5. 是否可部署：YES（就已完成範圍）
-已完成項全數通過測試、零回歸、無 runtime/console error。可作為 RC 部署測試。
-**但**：Task 2/3/4/10 尚有延後項（見 KNOWN_ISSUES.md）；收款模組仍不存在。若營運必須有收款/待收款，尚不可視為「完整交付」。
+## 5. 是否可部署：YES
+已完成項（含收款/未收款模組）全數通過測試、162/162 零回歸、無 runtime/console error。可作為 rc-2 部署上線。
+- 收款/未收款模組**已補齊**（Task 4，決策 D1 後）。
+- 仍延後：Task 2 權限層整段重排、Task 3 switch 單一分派、Task 5 全面加鎖稽核、Task 10 DriveApp備份/Cache遷移（見 KNOWN_ISSUES.md，皆屬大型重構或需真環境驗證，非阻擋上線）。
+- 部署請照 `docs/部署手冊.md`；上線後照 `docs/RC_回歸測試清單_v2.58.md` 快篩 8 項。
 
 ## 6. 部署步驟 / 風險 / 回滾（Apps Script）
 **部署**：GAS 編輯器貼上 `卡比集機器人.gs` 全文 → 儲存 → 部署→管理部署作業→編輯→新版本→部署 → LINE 打「#版本」確認。
