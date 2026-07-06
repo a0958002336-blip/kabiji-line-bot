@@ -74,6 +74,8 @@ const EXPORT_NAMES = [
   'recvDetect',
   'receivableQuery',
   'receivableDetail',
+  'recvCleanup',
+  'recvRowId',
 ];
 
 /* ------------------------------------------------------------------ */

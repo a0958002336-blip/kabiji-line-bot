@@ -577,16 +577,23 @@ function handleEvent(event) {
   if (/^#(待收款|未收款|今日待收款|今日收款)\s*$/.test(text)) { replyToLine(replyToken, receivableQuery(/今日/.test(text))); return; }
   if (/^#收款明細\s*$/.test(text)) { replyToLine(replyToken, receivableDetail()); return; }
   if (/^#已收\s+/.test(text)) {
-    const key = text.replace(/^#已收\s+/, '').trim();
-    const r = receivableClose(key, getDisplayName(chatId, source.userId));
-    replyToLine(replyToken, r ? ('✅ 已收款結案：' + r.customer + (r.supplier ? '／' + r.supplier : '') + '｜' + r.item + '｜' + r.amount + ' 元') : ('查無「' + key + '」的未收款。'));
+    let body = text.replace(/^#已收\s+/, '').trim(); let all = false;
+    if (/^全部\s+/.test(body)) { all = true; body = body.replace(/^全部\s+/, '').trim(); }
+    const key = body.split(/\s+/)[0];
+    const r = receivableClose(key, getDisplayName(chatId, source.userId), all);
+    if (r.none) replyToLine(replyToken, '查無「' + key + '」的未收款。');
+    else if (r.candidates) replyToLine(replyToken, recvCandidateReply(r.candidates));
+    else replyToLine(replyToken, '✅ 已收款結案 ' + r.done.length + ' 筆：\n' + r.done.map(function (x) { return x.id + '｜' + x.customer + (x.supplier ? '／' + x.supplier : '') + '｜' + x.amount + ' 元'; }).join('\n'));
     return;
   }
   if (/^#取消收款\s+/.test(text)) {
-    const body = text.replace(/^#取消收款\s+/, '').trim();
+    let body = text.replace(/^#取消收款\s+/, '').trim(); let all = false;
+    if (/^全部\s+/.test(body)) { all = true; body = body.replace(/^全部\s+/, '').trim(); }
     const mkey = body.match(/^(\S+)\s*(.*)$/); const key = mkey ? mkey[1] : body; const reason = mkey ? mkey[2].trim() : '';
-    const r = receivableCancel(key, getDisplayName(chatId, source.userId), reason);
-    replyToLine(replyToken, r ? ('🗑️ 已取消收款（保留紀錄/軟刪除）：' + r.customer + '｜' + r.item + '｜' + r.amount + ' 元' + (reason ? '｜原因 ' + reason : '')) : ('查無「' + key + '」的未收款。'));
+    const r = receivableCancel(key, getDisplayName(chatId, source.userId), reason, all);
+    if (r.none) replyToLine(replyToken, '查無「' + key + '」的未收款。');
+    else if (r.candidates) replyToLine(replyToken, recvCandidateReply(r.candidates));
+    else replyToLine(replyToken, '🗑️ 已取消收款（軟刪除）' + r.done.length + ' 筆：\n' + r.done.map(function (x) { return x.id + '｜' + x.customer + '｜' + x.amount + ' 元'; }).join('\n') + (reason ? '\n原因：' + reason : ''));
     return;
   }
   // 自動偵測：含正式收款關鍵字 + 可解析金額 → 建立【未收】（fail-closed：無金額只提示不建立）
@@ -3019,29 +3026,54 @@ function recvCreate(p, groupId, messageId, byUser, rawText) {
   return { created: true, p: p };
 }
 function todayYMD() { return Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy/MM/dd'); }
-// 找最新一筆「未收且未軟刪」且 客戶或供應商 命中 key 的列號（1-based，含表頭）。
-function recvMatchLatest(key) {
-  const data = recvSheet().getDataRange().getValues(); const k = String(key).trim(); let found = -1;
+// R 編號＝資料列索引 data[i]（軟刪除不移列，故 ID 穩定，清單顯示與 #取消/#已收 接受的 ID 一致）。
+function recvRowId(i) { return 'R' + ('0000' + i).slice(-4); }
+function recvParseId(key) { const m = String(key).trim().match(/^[Rr]0*(\d+)$/); return m ? parseInt(m[1], 10) : -1; }
+function recvUpdateRow(rowNum, arr) { recvSheet().getRange(rowNum, 1, 1, arr.length).setValues([arr]); }
+// 命中所有「未收且未軟刪」且 客戶/供應商 含 key 的資料列索引。
+function recvMatchAll(key) {
+  const data = recvSheet().getDataRange().getValues(); const k = String(key).trim(); const hits = [];
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][7]) !== '未收' || data[i][15]) continue;
-    if (String(data[i][2]) === k || String(data[i][3]) === k || String(data[i][2]).indexOf(k) !== -1 || String(data[i][3]).indexOf(k) !== -1) found = i + 1;
+    if (String(data[i][2]) === k || String(data[i][3]) === k || String(data[i][2]).indexOf(k) !== -1 || String(data[i][3]).indexOf(k) !== -1) hits.push(i);
   }
-  return found;
+  return hits;
 }
-function recvUpdateRow(rowNum, arr) { recvSheet().getRange(rowNum, 1, 1, arr.length).setValues([arr]); }
-function receivableClose(key, byUser) {
-  const rowNum = recvMatchLatest(key); if (rowNum < 0) return null;
-  const arr = recvSheet().getRange(rowNum, 1, 1, 18).getValues()[0];
-  arr[7] = '已收'; arr[9] = normalizeEmployeeName(byUser || arr[9] || ''); arr[10] = nowStr(); arr[11] = nowStr();
-  recvUpdateRow(rowNum, arr);
-  return { customer: arr[2], supplier: arr[3], item: arr[4], amount: arr[5] };
+// 解析目標：R編號→單列；關鍵字→單列命中即用、多列命中回候選、無命中 null。all=true 則多列全取。
+function recvResolve(key, all) {
+  const data = recvSheet().getDataRange().getValues();
+  const id = recvParseId(key);
+  if (id > 0) { if (id < data.length && String(data[id][7]) === '未收' && !data[id][15]) return { rows: [id] }; return null; }
+  const hits = recvMatchAll(key);
+  if (!hits.length) return null;
+  if (all || hits.length === 1) return { rows: hits };
+  return { candidates: hits };
 }
-function receivableCancel(key, byUser, reason) {
-  const rowNum = recvMatchLatest(key); if (rowNum < 0) return null;
-  const arr = recvSheet().getRange(rowNum, 1, 1, 18).getValues()[0];
-  arr[7] = '取消'; arr[15] = nowStr(); arr[16] = normalizeEmployeeName(byUser || ''); arr[17] = String(reason || '').trim();   // 軟刪除，保留列與稽核
-  recvUpdateRow(rowNum, arr);
-  return { customer: arr[2], supplier: arr[3], item: arr[4], amount: arr[5] };
+function recvRowBrief(i) { const d = recvSheet().getDataRange().getValues()[i]; return recvRowId(i) + '｜' + (d[2] || '') + (d[3] ? '／' + d[3] : '') + '｜' + (d[4] || '') + '｜' + (Number(d[5]) || 0) + ' 元'; }
+function recvCandidateReply(hits) {
+  return '⚠️ 找到 ' + hits.length + ' 筆未收，請指定 ID（例：' + recvRowId(hits[0]) + '），或用「全部 <關鍵字>」一次處理：\n' + hits.map(function (i) { return recvRowBrief(i); }).join('\n');
+}
+function receivableClose(key, byUser, all) {
+  const res = recvResolve(key, all); if (!res) return { none: true };
+  if (res.candidates) return { candidates: res.candidates };
+  const done = res.rows.map(function (i) {
+    const arr = recvSheet().getRange(i + 1, 1, 1, 18).getValues()[0];
+    arr[7] = '已收'; arr[9] = normalizeEmployeeName(byUser || arr[9] || ''); arr[10] = nowStr(); arr[11] = nowStr();
+    recvUpdateRow(i + 1, arr);
+    return { id: recvRowId(i), customer: arr[2], supplier: arr[3], item: arr[4], amount: arr[5] };
+  });
+  return { done: done };
+}
+function receivableCancel(key, byUser, reason, all) {
+  const res = recvResolve(key, all); if (!res) return { none: true };
+  if (res.candidates) return { candidates: res.candidates };   // 多筆命中 → 回候選，不自行挑一筆刪
+  const done = res.rows.map(function (i) {
+    const arr = recvSheet().getRange(i + 1, 1, 1, 18).getValues()[0];
+    arr[7] = '取消'; arr[15] = nowStr(); arr[16] = normalizeEmployeeName(byUser || ''); arr[17] = String(reason || '').trim();   // 軟刪除
+    recvUpdateRow(i + 1, arr);
+    return { id: recvRowId(i), customer: arr[2], supplier: arr[3], item: arr[4], amount: arr[5] };
+  });
+  return { done: done };
 }
 function receivableQuery(todayOnly) {
   const data = recvSheet().getDataRange().getValues(); const rows = []; let total = 0; const today = todayYMD();
@@ -3049,19 +3081,45 @@ function receivableQuery(todayOnly) {
     if (String(data[i][7]) !== '未收' || data[i][15]) continue;
     if (todayOnly && ymdStr(data[i][0]) !== today) continue;
     const amt = Number(data[i][5]) || 0; total += amt;
-    rows.push('・' + (data[i][2] || '') + (data[i][3] ? '／' + data[i][3] : '') + '｜' + (data[i][4] || '') + '｜' + amt + ' 元' + (data[i][9] ? '｜收款人 ' + data[i][9] : ''));
+    rows.push(recvRowId(i) + '｜' + (data[i][2] || '') + (data[i][3] ? '／' + data[i][3] : '') + '｜' + (data[i][4] || '') + '｜' + amt + ' 元' + (data[i][9] ? '｜收款人 ' + data[i][9] : ''));
   }
   if (!rows.length) return '📋 目前沒有未收款。';
-  return '📋 未收款清單' + (todayOnly ? '（今日）' : '') + '（' + rows.length + ' 筆）：\n' + rows.join('\n') + '\n――――――\n合計未收：' + total + ' 元';
+  return '📋 未收款清單' + (todayOnly ? '（今日）' : '') + '（' + rows.length + ' 筆）：\nID｜客戶／供應商｜品項｜金額\n' + rows.join('\n') + '\n――――――\n合計未收：' + total + ' 元\n（結案：#已收 R編號｜取消：#取消收款 R編號）';
 }
 function receivableDetail() {
   const data = recvSheet().getDataRange().getValues(); const rows = [];
   for (let i = 1; i < data.length; i++) {
     const st = String(data[i][7]); const tag = st === '取消' ? '❌取消' : (st === '已收' ? '✅已收' : '🔵未收');
-    rows.push(tag + '｜' + (data[i][2] || '') + '｜' + (data[i][4] || '') + '｜' + (Number(data[i][5]) || 0) + ' 元' + (st === '已收' && data[i][9] ? '｜收款人 ' + data[i][9] : '') + (st === '取消' && data[i][17] ? '｜原因 ' + data[i][17] : ''));
+    rows.push(recvRowId(i) + '｜' + tag + '｜' + (data[i][2] || '') + '｜' + (data[i][4] || '') + '｜' + (Number(data[i][5]) || 0) + ' 元' + (st === '已收' && data[i][9] ? '｜收款人 ' + data[i][9] : '') + (st === '取消' && data[i][17] ? '｜原因 ' + data[i][17] : ''));
   }
   if (!rows.length) return '📋 目前沒有收款紀錄。';
   return '📋 收款明細（全部 ' + rows.length + ' 筆）：\n' + rows.join('\n');
+}
+// 一次性清理（手動執行）：修欄位對調(客戶=數字代號/供應商=中文名) + 軟刪除重複。dryRun 預設 true 只 log 預覽。
+function recvCleanup(dryRun) {
+  if (dryRun === undefined) dryRun = true;
+  const sheet = recvSheet(); const data = sheet.getDataRange().getValues();
+  const preview = []; const seen = {};
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][15]) continue;   // 已軟刪跳過
+    let cust = String(data[i][2] || '').trim(), sup = String(data[i][3] || '').trim(); let swapped = false;
+    if (/[一-龥]/.test(cust) && /^\d+$/.test(sup)) { const t = cust; cust = sup; sup = t; swapped = true; }   // 欄位對調修正
+    const key = cust + '|' + sup + '|' + (Number(data[i][5]) || 0) + '|' + String(data[i][4] || '');
+    let dupe = false;
+    if (String(data[i][7]) === '未收') { if (seen[key]) dupe = true; else seen[key] = i; }
+    const acts = []; if (swapped) acts.push('修正欄位對調'); if (dupe) acts.push('軟刪除(重複)');
+    if (!acts.length) continue;
+    preview.push(recvRowId(i) + ' ' + acts.join('+') + '：客戶=' + cust + ' 供應商=' + sup + ' 金額=' + (Number(data[i][5]) || 0));
+    if (!dryRun) {
+      const arr = sheet.getRange(i + 1, 1, 1, 18).getValues()[0];
+      arr[2] = cust; arr[3] = sup;
+      if (dupe) { arr[7] = '取消'; arr[15] = nowStr(); arr[16] = 'system'; arr[17] = '系統清理:欄位對調重複'; }
+      recvUpdateRow(i + 1, arr);
+    }
+  }
+  const head = (dryRun ? '【預覽 dryRun，未實際變更】' : '【已執行清理】') + ' 收款髒資料：' + preview.length + ' 項';
+  try { Logger.log(head + (preview.length ? '\n' + preview.join('\n') : '')); } catch (e) { }
+  return { count: preview.length, preview: preview, dryRun: dryRun };
 }
 
 /* ========================== 【綁定 / 地點 / 離職 / 評比】 ========================== */

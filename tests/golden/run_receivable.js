@@ -81,6 +81,65 @@ const MSG = '6986\n老人田 高山228 特8件 要收款6800元';
   check('6c 同內容>24h→允許再建(2筆)', rows(env3).length === 2, '筆數=' + rows(env3).length);
 })();
 
+/* ---------- 7. 清單顯示 R 編號（Bug1）---------- */
+(function () {
+  const env = mkEnv();
+  send(env, '6986\n老人田 高山228 特8件 要收款6800元');
+  const r = send(env, '#未收款');
+  check('7a 清單有表頭 ID｜客戶', /ID｜客戶/.test(r), r);
+  check('7b 清單每筆顯示 R 編號', /R0001/.test(r), r);
+})();
+
+/* ---------- 8. 用清單顯示的 ID 取消 → 成功且合計正確（Bug1）---------- */
+(function () {
+  const env = mkEnv();
+  send(env, '6986\n老人田 高山228 特8件 要收款6800元');
+  send(env, '2988\n阿美 玉美 特5件 要收款500元');
+  const list = send(env, '#未收款');
+  const id = (list.match(/R\d{4}/g) || [])[0];   // 取清單第一個 ID
+  const r = send(env, '#取消收款 ' + id + ' 測試');
+  check('8a 用清單ID取消成功', /已取消收款/.test(r) && new RegExp(id).test(r), 'id=' + id + ' reply=' + r);
+  const list2 = send(env, '#未收款');
+  check('8b 取消後剩 1 筆、合計正確', /（1 筆）/.test(list2) && (/合計未收：6800/.test(list2) || /合計未收：500/.test(list2)), list2);
+})();
+
+/* ---------- 9. 多筆同關鍵字 → 回候選、資料不變（Bug2）---------- */
+(function () {
+  const env = mkEnv();
+  send(env, '6986\n老人田 高山228 特8件 要收款6800元');
+  send(env, '6986\n老人田 玉美 特5件 要收款500元');   // 同客戶6986、不同品項金額(不去重)
+  const before = rows(env).filter(function (x) { return String(x[7]) === '未收'; }).length;
+  const r = send(env, '#取消收款 6986');
+  check('9a 多筆命中→回候選清單', /找到 2 筆/.test(r) && /R000/.test(r), r);
+  const after = rows(env).filter(function (x) { return String(x[7]) === '未收'; }).length;
+  check('9b 候選階段不動資料', before === 2 && after === 2, before + '→' + after);
+})();
+
+/* ---------- 10. #取消收款 全部 關鍵字 → 全部取消 ---------- */
+(function () {
+  const env = mkEnv();
+  send(env, '6986\n老人田 高山228 特8件 要收款6800元');
+  send(env, '6986\n老人田 玉美 特5件 要收款500元');
+  const r = send(env, '#取消收款 全部 6986');
+  check('10a 全部取消回覆 2 筆', /已取消收款（軟刪除）2 筆/.test(r), r);
+  check('10b 未收款清空', /沒有未收款/.test(send(env, '#未收款')), '');
+})();
+
+/* ---------- 11. 髒資料清理（欄位對調重複，dryRun 預覽→執行）---------- */
+(function () {
+  const env = mkEnv();
+  const sh = env.fns.getSheet('待收款');
+  sh.appendRow(['2026/07/01 10:00', '2026/07/01', '6986', '老人田', '高山228 特8件', 6800, '', '未收', '', '', '', '', '', '', '', '', '', '']);
+  sh.appendRow(['2026/07/01 10:01', '2026/07/01', '老人田', '6986', '高山228 特8件', 6800, '', '未收', '', '', '', '', '', '', '', '', '', '']);   // 欄位對調重複
+  const pv = env.fns.recvCleanup(true);
+  check('11a dryRun 偵測到 1 項且不改資料', pv.count === 1 && rows(env).filter(function (x) { return String(x[7]) === '未收'; }).length === 2, JSON.stringify(pv.preview));
+  env.fns.recvCleanup(false);
+  const un = rows(env).filter(function (x) { return String(x[7]) === '未收' && !x[15]; });
+  check('11b 執行後未收剩 1 筆（重複軟刪）', un.length === 1, JSON.stringify(un.map(function (x) { return x[2] + '/' + x[3]; })));
+  check('11c 保留列(軟刪不實刪)', rows(env).length === 2, '列數=' + rows(env).length);
+  check('11d 對調欄位已修正(客戶=6986)', un[0] && String(un[0][2]) === '6986' && String(un[0][3]) === '老人田', JSON.stringify(un[0]));
+})();
+
 console.log('\n========== Task 4 收款/未收款 模組 回歸測試 ==========\n');
 console.log(out.join('\n'));
 console.log('\n--------------------------------------------------');
