@@ -155,6 +155,22 @@ const MSG = '6986\n老人田 高山228 特8件 要收款6800元';
   check('12d #待辦 同走未收款清單', /收款人/.test(send(env, '#待辦')), '');
 })();
 
+/* ---------- 13. 不變性護欄：任何清單/取消/已收/清理 都不得覆寫他筆 collectedBy ---------- */
+(function () {
+  const env = mkEnv();
+  const sh = env.fns.getSheet('待收款');
+  sh.appendRow(['2026/07/01 10:00', '2026/07/01', '6986', '老人田', '高山228 特8件', 6800, '', '未收', '劉子緯', '阿良', '', '', '', '', '', '', '', '']);   // R0001 收款人=阿良
+  sh.appendRow(['2026/07/01 11:00', '2026/07/01', '2988', '阿美', '玉美 特5件', 500, '', '未收', '劉子緯', '', '', '', '', '', '', '', '', '']);          // R0002 無收款人
+  check('13a R0001 顯示收款人阿良', /收款人 阿良/.test(env.fns.receivableQuery(false)), env.fns.receivableQuery(false));
+  send(env, '#取消收款 R0002');
+  check('13b 取消他筆後 R0001 收款人仍阿良', String(rows(env)[0][9]) === '阿良', JSON.stringify(rows(env)[0]));
+  env.fns.getSheet('待收款').appendRow(['2026/07/01 12:00', '2026/07/01', '7777', '阿花', 'X 特3件', 300, '', '未收', '劉子緯', '', '', '', '', '', '', '', '', '']);
+  send(env, '#已收 7777');
+  check('13c 已收他筆後 R0001 收款人仍阿良', String(rows(env)[0][9]) === '阿良', JSON.stringify(rows(env)[0]));
+  env.fns.recvCleanup(false);
+  check('13d cleanup 後 R0001 收款人仍阿良', String(rows(env)[0][9]) === '阿良', JSON.stringify(rows(env)[0]));
+})();
+
 console.log('\n========== Task 4 收款/未收款 模組 回歸測試 ==========\n');
 console.log(out.join('\n'));
 console.log('\n--------------------------------------------------');

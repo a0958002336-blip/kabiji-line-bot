@@ -62,7 +62,8 @@ function totalWrites(w) { return Object.keys(w).reduce(function (a, k) { return 
 /* ---------- D. 端到端：漢光出貨單 → 建立寄運、且「不」建立收款/財務 ---------- */
 (function () {
   const r = drive('漢光\n老八田南瓜 特30件（漢光三場950元 需收台回來）');
-  check('D1 漢光30件 → 建立寄運 1 筆', r.writes['寄運資料'] === 1, JSON.stringify(r.writes));
+  // 寄運定義收緊：漢光無「寄X」且非物流客戶 → 不記寄運（見 DECISIONS D-SHIPRULE）
+  check('D1 漢光30件(無寄/非物流客戶) → 寄運0', !r.writes['寄運資料'], JSON.stringify(r.writes));
   check('D2 漢光30件 → 不建立收款/財務', !r.writes['財務改價'], JSON.stringify(r.writes));
 })();
 
@@ -87,8 +88,8 @@ function totalWrites(w) { return Object.keys(w).reduce(function (a, k) { return 
 
 /* ---------- G. Task5 數字客戶白名單 ---------- */
 (function () {
-  const w = drive('3088\n南瓜 30件');   // 3088 為白名單數字客戶（無「寄」也放行）
-  check('G1 白名單數字客戶3088 → 建立寄運', w.writes['寄運資料'] === 1, JSON.stringify(w.writes));
+  const w = drive('3088\n南瓜 30件 寄旭陽');   // 數字客戶(Bug1允許)＋寄旭陽(定義收緊需寄X) → 記寄運
+  check('G1 數字客戶3088+寄旭陽 → 建立寄運', w.writes['寄運資料'] === 1, JSON.stringify(w.writes));
   const b1 = drive('1828\n南瓜 30件');   // 1828 非白名單 → 擋
   check('G2 非白名單數字1828 → 不建立寄運', !b1.writes['寄運資料'], JSON.stringify(b1.writes));
   const b2 = drive('1828\n50件');

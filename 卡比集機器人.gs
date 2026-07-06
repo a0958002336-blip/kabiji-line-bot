@@ -31,7 +31,7 @@ function versionMessage() {
     '【收款/待收款】新模組：偵測建立→#已收→#取消收款(軟刪除留Log)；清單顯 R 編號、多筆命中需指定\n' +
     '【出勤】別名合併(良=阿良、宏欸4:07=宏欸)；出勤統計/綜合評比 新簡表＋明細版\n' +
     '【冰庫】查詢結果貼回可直接加「出N/修改N/取消」執行；純貼回仍防呆不寫入\n' +
-    '【寄運誤判防呆】指示句/物流商不當客戶、判不出客戶不亂寫(fail-closed)、數字客戶白名單\n' +
+    '【寄運定義收緊】只有「寄X物流指定」或「客戶在物流客戶名單」才記寄運；指示句/物流商不當客戶(fail-closed)\n' +
     '【安全】事件去重、高危操作 fail-closed 限老闆\n' +
     '你看到這行＝最新程式已生效（對照上方版本＋hash 即可確認是否新版）。';
 }
@@ -642,34 +642,40 @@ function handleEvent(event) {
     if (/[(（]\s*冰\s*[)）]/.test(text)) { const ice = handleFreezerIceBatch(text); if (ice.count > 0) iceReply = ice.reply; }
     let rackReply = '';
     if (/[(（][^)）]*[*＊]\s*\d+[^)）]*[)）]/.test(text)) { const rk = handleRackParenBatch(text); if (rk.count > 0) rackReply = rk.reply; }
-    if (ship.count > 0 || iceReply || rackReply) {
-      if (ship.count > 0) {
-        logIntent('寄運建立', text);                                  // 除錯：印出 Intent/Confidence/Reason
-        // ★ P0 硬攔：寄運寫入前必須 Intent Confidence≥95（「寧可不執行也不執行錯」）。
-        //   正式寄運單（客戶+品項+件數）恒判為 shipping(96)，故不影響正常寫入；異常則不建立並提示。
-        if (!intentAllowsWrite(text)) { if (!quiet()) replyToLine(replyToken, '⚠️ 無法確認指令，請重新輸入正式寄運格式（客戶＋品項＋件數，例：漢光⏎南瓜 特30件 寄旭陽）。'); return; }
-        const sh = getSheet(SHEET_SHIP);
-        const tz = getSheet(SHEET_TAIZI);
-        let taiziTotal = 0; const taiziSkip = [];
-        ship.records.forEach(function (r) {
-          sh.appendRow([nowStr(), r.customer, r.vendor, r.name, r.grade, r.qty, r.pack || '', r.logistics || '', '', r.note || '', r.unit || '件']);
-          if (r.pack === '台子' && Number(r.qty) > 0) {
-            if (freezerBalanceOf(r.customer, r.name) > 0) { taiziSkip.push(r.customer + ' ' + r.name); }   // 冰庫已有此品項 → 台子已於寄冰時記過，出貨不重複記
-            else { tz.appendRow([nowStr(), '', '出庫', '台子', r.qty, r.customer]); taiziTotal += Number(r.qty); }
-          }
-        });
-        let rep = '✅ 已記錄寄運資料（' + ship.count + ' 筆，已去掉貨主名）：\n' + shippingCleanSummary(ship.records);
-        if (taiziTotal > 0) rep += '\n\n🥡 同時記台子出庫 ' + taiziTotal + ' 個（查台子看得到）';
-        if (taiziSkip.length > 0) rep += '\n\n⚠️ 下列品項冰庫尚有庫存，台子已於寄冰時記過，本次出貨「不重複記台子」：\n・' + taiziSkip.join('\n・') + '\n（若要出冰庫的貨請改用「冰庫出貨」指令）';
-        if (iceReply) rep += '\n\n' + iceReply;
-        if (rackReply) rep += '\n\n' + rackReply;
-        if (!quiet()) replyToLine(replyToken, rep);
-      } else {
-        if (!quiet()) replyToLine(replyToken, (iceReply ? iceReply + '\n\n' : '') + rackReply);
-      }
+    // 寄運定義收緊：只有「有寄X物流指定」或「客戶在物流客戶名單」的品項才記寄運。
+    const carrierSet = allCarrierCustomers();
+    const shipRecs = ship.records.filter(function (r) { return isShippingRecord(r, carrierSet); });
+    const hasTaizi = ship.records.some(function (r) { return r.pack === '台子' && Number(r.qty) > 0; });
+    if (shipRecs.length > 0 && !intentAllowsWrite(text)) { if (!quiet()) replyToLine(replyToken, '⚠️ 無法確認指令，請重新輸入正式寄運格式（客戶＋品項＋件數＋寄物流，例：漢光⏎南瓜 特30件 寄旭陽）。'); return; }
+    let taiziTotal = 0; const taiziSkip = [];
+    if (shipRecs.length > 0 || hasTaizi) {
+      const sh = getSheet(SHEET_SHIP); const tz = getSheet(SHEET_TAIZI);
+      if (shipRecs.length > 0) logIntent('寄運建立', text);
+      ship.records.forEach(function (r) {
+        if (isShippingRecord(r, carrierSet)) sh.appendRow([nowStr(), r.customer, r.vendor, r.name, r.grade, r.qty, r.pack || '', r.logistics || '', '', r.note || '', r.unit || '件']);
+        // 台子出庫：所有 pack=台子 品項都記（不論是否寄運；十方齋單不記寄運但台子要出庫）
+        if (r.pack === '台子' && Number(r.qty) > 0) {
+          if (freezerBalanceOf(r.customer, r.name) > 0) { taiziSkip.push(r.customer + ' ' + r.name); }
+          else { tz.appendRow([nowStr(), '', '出庫', '台子', r.qty, r.customer]); taiziTotal += Number(r.qty); }
+        }
+      });
+    }
+    if (shipRecs.length > 0) {
+      let rep = '✅ 已記錄寄運資料（' + shipRecs.length + ' 筆，已去掉貨主名）：\n' + shippingCleanSummary(shipRecs);
+      if (taiziTotal > 0) rep += '\n\n🥡 同時記台子出庫 ' + taiziTotal + ' 個（查台子看得到）';
+      if (taiziSkip.length > 0) rep += '\n\n⚠️ 下列品項冰庫尚有庫存，台子已於寄冰時記過，本次不重複記台子：\n・' + taiziSkip.join('\n・');
+      if (iceReply) rep += '\n\n' + iceReply;
+      if (rackReply) rep += '\n\n' + rackReply;
+      if (!quiet()) replyToLine(replyToken, rep);
       return;
     }
-    // Bug5：有件數品項行但判不出客戶（指示句/物流商/黏行）→ fail-closed 不寫入、回格式教學
+    // 無寄運：只回實物記錄（台子/冰/鐵架），不回「已記錄寄運資料」
+    const physical = [];
+    if (taiziTotal > 0) physical.push('🥡 已記台子出庫 ' + taiziTotal + ' 個（查台子看得到）');
+    if (iceReply) physical.push(iceReply);
+    if (rackReply) physical.push(rackReply);
+    if (physical.length) { if (!quiet()) replyToLine(replyToken, physical.join('\n\n')); return; }
+    // 有件數品項行但判不出客戶（指示句/物流商/黏行）→ fail-closed 教學；其餘（如純出貨非寄運）→ 靜默(往下走)
     if (ship.unresolved > 0) { replyToLine(replyToken, '⚠️ 無法判斷指令，請使用指定格式（打「指令表」查看）。'); return; }
   }
 
@@ -969,6 +975,10 @@ function handleStockPaste(text) {
 /* ---- 物流商客戶名單 ---- */
 function getCarrierMap() { const raw = PROPS.getProperty('CARRIER_CUST'); if (raw === null) return { '旭陽': ['玉美加工廠', '玉美供食廠', '花蓮阿植', '中壢巧巧龍', '高雄復洋', '高雄農夫'] }; try { return JSON.parse(raw) || {}; } catch (e) { return {}; } }
 function getCarrierCustomers(carrier) { return getCarrierMap()[carrier] || []; }
+// 寄運定義收緊：所有物流商客戶名單合集（客戶名在此→視為寄運，即使無「寄X」）。
+function allCarrierCustomers() { const m = getCarrierMap(); const set = {}; Object.keys(m).forEach(function (k) { (m[k] || []).forEach(function (c) { if (c) set[String(c).trim()] = 1; }); }); return set; }
+// 單筆記錄是否算「寄運」：有物流指定(寄X) 或 客戶在物流客戶名單內。
+function isShippingRecord(r, carrierSet) { return !!(r && (r.logistics || (carrierSet || allCarrierCustomers())[String(r.customer).trim()])); }
 function setCarrierCustomers(carrier, list) { const m = getCarrierMap(); m[carrier] = list; PROPS.setProperty('CARRIER_CUST', JSON.stringify(m)); }
 
 /* ========================== 【寄運解析】 ========================== */

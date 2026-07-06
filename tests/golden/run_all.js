@@ -21,6 +21,7 @@ const SUITES = [
   'run_task7.js',         // Task7 回覆防護/未填地點
   'run_stats_format.js',  // Task11+12 統計輸出格式
   'run_bug5.js',          // Bug5 寄運誤判 + 補測
+  'run_ship_rule.js',     // 寄運定義收緊(業務規則)
   'run_receivable.js',    // Task4 收款/未收款
   'run_outbound.js',      // Task5 出庫/庫存
 ];
