@@ -161,9 +161,14 @@ function handleEvent(event) {
   // 管理群組內：明顯閒聊且非合法指令 → 不觸發任何功能
   if (looksLikeChat(text) && !parseCommand(text)) { return; }
 
-  // ★ 冰庫查詢結果被貼回來:不寫入、不解析(避免被鐵架/其他 parser 誤判) — P0
+  // ★ 冰庫查詢結果被貼回來 — P0：純貼回不寫入；但貼回後在品項行加操作字(出N/修改N/取消)→ 執行對應動作
   if (/^\s*❄/.test(text) || (/冰庫庫存/.test(text) && /【/.test(text))) {
-    if (!quiet()) replyToLine(replyToken, '⚠️ 此為冰庫查詢結果，不會寫入資料。');
+    const hasShip = /[：:]\s*\d+\s*出/.test(text) || /【[^】]*】\s*(?:全部出|全出|出)\s*$/m.test(text);
+    const hasEdit = /修改\s*\d+|取消|清除/.test(text);
+    if (hasEdit) { const c = handleFreezerCancel(text); if (c.count > 0) { replyToLine(replyToken, c.reply); return; } }
+    if (hasShip) { const s = handleFreezerShip(text); if (s.count > 0) { if (!quiet()) replyToLine(replyToken, s.reply); return; } }
+    if (hasShip || hasEdit) { replyToLine(replyToken, '⚠️ 冰庫貼回操作格式不符。出貨：品項：餘額 出N；改量：品項 修改N；取消：品項 取消。'); return; }
+    if (!quiet()) replyToLine(replyToken, '⚠️ 此為冰庫查詢結果，不會寫入資料。');   // 純貼回 → 保留原防呆
     return;
   }
   // ★ 寄運查詢結果被貼回來：絕不當新單重記；可直接在單上改件數/包裝、或取消/清除
@@ -191,7 +196,13 @@ function handleEvent(event) {
   }
 
   /* ---- 員工外勤補貼 ---- */
-  if (/外勤補貼/.test(text) && /取消/.test(text) && !/清除|設定/.test(text)) { const dc = handleDutyCancel(text); if (dc.count > 0) { replyToLine(replyToken, dc.reply); return; } }
+  if (/外勤補貼/.test(text) && /取消/.test(text) && !/清除|設定/.test(text)) {
+    const dc = handleDutyCancel(text);
+    if (dc.count > 0) { replyToLine(replyToken, dc.reply); return; }
+    // Bug3b：外勤貼回/外勤取消格式不符 → 回外勤取消教學，不得掉到寄運取消路由
+    replyToLine(replyToken, '⚠️ 找不到符合的外勤補貼可取消。請用：「員工 外勤補貼 取消」，指定月份用「員工 外勤補貼（2026/06）取消」。');
+    return;
+  }
   if (/^#設定外勤補貼/.test(text)) { if (!ownerGate(source, replyToken)) return; replyToLine(replyToken, setDutyConfig(text)); return; }
   if (/外勤補貼/.test(text) && /清除/.test(text) && /確定/.test(text)) { const n = clearAllRows(SHEET_DUTY); replyToLine(replyToken, '🗑️ 已清除全部外勤補貼，共 ' + n + ' 筆。'); return; }
   if (/^(查)?\s*(全部外勤|所有外勤|外勤全部|外勤紀錄|外勤記錄|外勤明細|外勤清單)\s*$/.test(text)) { replyToLine(replyToken, dutyAllDetail()); return; }
@@ -1941,6 +1952,9 @@ function handleDuty(text) {
   if (!m) return { count: 0 };
   let emp = m[1].trim(); let rest = (m[2] || '').trim();
   if (!emp || /^(查|本月|上月|這個|當月|#)/.test(emp)) return { count: 0 };
+  // Bug3a：代名詞/指示詞開頭非員工，疑問或「跑哪/去哪」等聊天句 → 不登記外勤
+  if (/^(你|妳|我|他|她|牠|它|大家|誰|有人|人家|這個|那個|你這個)/.test(emp)) return { count: 0 };
+  if (/[嗎呢？?]\s*$/.test(text) || /(跑哪|哪去|去哪|在哪|幹嘛|幹麼|幹什麼)/.test(text)) return { count: 0 };
   emp = normalizeEmployeeName(emp);                                   // SSOT：外勤寫入前正規化姓名
   let override = null; const om = rest.match(/補貼\s*(\d+)/); if (om) { override = parseInt(om[1], 10); rest = rest.replace(om[0], '').trim(); }
   let depTime = ''; const tm = rest.match(/(\d{1,2})[:：](\d{2})/);

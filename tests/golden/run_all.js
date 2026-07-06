@@ -16,6 +16,7 @@ const SUITES = [
   'run_emp_norm.js',      // Task6 員工正規化
   'run_intent_guard.js',  // Task3/4/9 意圖守衛
   'run_task9.js',         // Task9 誤判補強
+  'run_route_fix.js',     // Bug3/4 外勤/冰庫貼回路由
   'run_task7.js',         // Task7 回覆防護/未填地點
   'run_stats_format.js',  // Task11+12 統計輸出格式
   'run_receivable.js',    // Task4 收款/未收款
