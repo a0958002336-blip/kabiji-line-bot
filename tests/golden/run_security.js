@@ -35,6 +35,7 @@ function send(env, text, userId) {
     { t: '#清空冰庫名單', prop: 'WAREHOUSES' },
     { t: '#設定工作群組', prop: 'WORK_GROUPS' },
     { t: '#取消客戶', prop: 'GROUP_CUSTOMER' },
+    { t: '#設定外勤補貼 18:00 500 800', prop: 'DUTY_THRESHOLD' },
   ];
   cmds.forEach(function (c, i) {
     const env = mkEnv(true);

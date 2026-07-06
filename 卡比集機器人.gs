@@ -192,7 +192,7 @@ function handleEvent(event) {
 
   /* ---- 員工外勤補貼 ---- */
   if (/外勤補貼/.test(text) && /取消/.test(text) && !/清除|設定/.test(text)) { const dc = handleDutyCancel(text); if (dc.count > 0) { replyToLine(replyToken, dc.reply); return; } }
-  if (/^#設定外勤補貼/.test(text)) { replyToLine(replyToken, setDutyConfig(text)); return; }
+  if (/^#設定外勤補貼/.test(text)) { if (!ownerGate(source, replyToken)) return; replyToLine(replyToken, setDutyConfig(text)); return; }
   if (/外勤補貼/.test(text) && /清除/.test(text) && /確定/.test(text)) { const n = clearAllRows(SHEET_DUTY); replyToLine(replyToken, '🗑️ 已清除全部外勤補貼，共 ' + n + ' 筆。'); return; }
   if (/^(查)?\s*(全部外勤|所有外勤|外勤全部|外勤紀錄|外勤記錄|外勤明細|外勤清單)\s*$/.test(text)) { replyToLine(replyToken, dutyAllDetail()); return; }
   if (/^查\s*外勤/.test(text) || /^外勤補貼\s*$/.test(text) || /^(本月|上月|這個?月|當月)外勤\s*$/.test(text) || /^(本月|上月|這個?月|當月)?外勤(補貼|合計)/.test(text)) {
