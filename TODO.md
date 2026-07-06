@@ -1,0 +1,20 @@
+# TODO — 卡比集機器人 + APP（更新：2026-07-02）
+
+## 🔴 等董事長回家一次決策（見 docs/DECISIONS_PENDING.md）
+- D1 收款/未收款資料模型（Bug2）
+- D2 取消流水號 schema（Bug3）
+- D3 冰庫實際問題描述（你說「部署後沒變化」，但診斷顯示冰庫扣庫存正常）
+- D4 打卡 abnormal_logs schema + 修正打卡語義（Bug4）
+- D5 效能：出貨迴圈冰庫 map-hoist（較侵入，需核可）
+- D6 寄運輸入格式：單行 vs 多行（Golden G004）
+
+## 🟢 可自主推進（不需決策）
+1. **Bug1 驗收閉環**：等你部署 v2.58 + LINE 實測（腳本已備）。
+2. **Golden 補齊**：新增 出貨/冰庫/台子/鐵架/查詢 回歸案例（B2，需 seeded mock data）。
+3. **APP Phase 1**：C 正式開發中（登入/首頁/查詢/庫存/冰庫/未收款/寄運，接真實 API，feature 分支）。
+4. **UI Prototype 完善**：依你回來的 6 個設計選擇調整。
+5. **Bug5 權限缺口**：低風險，可先修（feature 分支 + Golden）。
+6. **文件/CHANGELOG/Regression** 持續維護。
+
+## ⛔ 明令不做（等你決策）
+- 不改 Business Rules、不改 Schema、不改 Message Router 大結構、不動正式資料。
