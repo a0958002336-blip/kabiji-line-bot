@@ -654,6 +654,8 @@ function handleEvent(event) {
       }
       return;
     }
+    // Bug5：有件數品項行但判不出客戶（指示句/物流商/黏行）→ fail-closed 不寫入、回格式教學
+    if (ship.unresolved > 0) { replyToLine(replyToken, '⚠️ 無法判斷指令，請使用指定格式（打「指令表」查看）。'); return; }
   }
 
   if (/[(（]/.test(text)) {
@@ -964,10 +966,18 @@ function nextHasItem(lines, fromIdx) {
   }
   return false;
 }
+// Bug5a：客戶行防呆——含指示動詞或「含空白的長句」不得當客戶（短名稱才是客戶）。
+var SHIP_INSTRUCTION_RE = /(上車|上去|下車|下來|搬|扛|放到|放在|拿去|拿到|載去|載到|裝車|卸貨|卸車|回來|過來|開去|送去|拉去|搬去|收回去)/;
+function looksLikeInstruction(s) {
+  const t = String(s || '').trim();
+  if (!t || isKnownShipCustomer(t)) return false;
+  if (SHIP_INSTRUCTION_RE.test(t)) return true;
+  return /\s/.test(t) && t.replace(/\s+/g, '').length >= 7;
+}
 function parseShipping(text) {
   const vendors = getVendors().slice().sort(function (a, b) { return b.length - a.length; });
   const lines = String(text).split('\n').map(function (l) { return l.trim(); });
-  const records = []; let customer = '', logistics = '', msgLogistics = '';
+  const records = []; let customer = '', logistics = '', msgLogistics = ''; let unresolvedItems = 0;
   const knownCarriers = Object.keys(getCarrierMap());
   for (let k = 0; k < lines.length; k++) {
     const line = lines[k];
@@ -1002,7 +1012,11 @@ function parseShipping(text) {
       } else { name = tk.join(' '); }
       if (!name) name = rest;
       if (customer) records.push({ customer: customer, vendor: vendor, name: name, grade: grade, qty: qty, pack: pack, logistics: itemLogi || logistics, note: noteArr.join(' '), unit: unit });
+      else unresolvedItems++;   // Bug5c：判不出客戶 → 不亂掛到上一個客戶，計入待確認
     } else {
+      // Bug5b：整行等於已知物流商/貨主名 → 視為該段物流指定，不當客戶
+      const _bare = line.replace(/[（(][^)）]*[）)]/g, '').replace(/\s+/g, ' ').trim();
+      if (_bare && (knownCarriers.indexOf(_bare) !== -1 || vendors.indexOf(_bare) !== -1)) { msgLogistics = _bare; continue; }
       // 「寄<物流>（備註）」獨立行：先拆出括號備註，再認物流（支援「寄旭陽（修清）」這種 寄+貨運名+備註）
       let _lgNote = '';
       const _lgLine = line.replace(/[（(]\s*([^)）]*?)\s*[）)]/g, function (_m, inner) { const t = String(inner).trim(); if (t) _lgNote = _lgNote ? _lgNote + ' ' + t : t; return ' '; }).replace(/\s+/g, ' ').trim();
@@ -1020,13 +1034,13 @@ function parseShipping(text) {
       const wm = line.match(/寄\s*[車運]\s*([^\s)）]+)/) || line.match(/寄\s*([^\s)）]+)\s*$/);
       logistics = wm ? wm[1] : '';
       const _cand = line.replace(/[\(（]?\s*寄\s*[車運到去]?\s*[^\s)）]+\s*[）)]?/, '').replace(/自己載|自取/g, '').replace(/[\(（）\)]/g, '').trim();
-      // Bug1/R1.1：純數字抬頭且該行無「寄」→ 預設不建寄運（1828 一般交易誤記防呆）；
-      // Task5：但若為既有數字客戶白名單（如 3088）則放行。
-      customer = (/^\d+$/.test(_cand) && !/寄/.test(line) && !isKnownShipCustomer(_cand)) ? '' : _cand;
+      // Bug1/R1.1：純數字抬頭且該行無「寄」→ 預設不建寄運（1828 誤記防呆）；Task5：數字白名單放行。
+      // Bug5a：指示句/含空白長句不得為客戶（fail-closed）。
+      customer = (looksLikeInstruction(_cand) || (/^\d+$/.test(_cand) && !/寄/.test(line) && !isKnownShipCustomer(_cand))) ? '' : _cand;
     }
   }
   if (msgLogistics) records.forEach(function (r) { if (!r.logistics) r.logistics = msgLogistics; });
-  return { count: records.length, records: records };
+  return { count: records.length, records: records, unresolved: unresolvedItems };
 }
 function shippingCleanSummary(recs) {
   const byCust = {}; const order = [];

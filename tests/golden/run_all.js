@@ -19,6 +19,7 @@ const SUITES = [
   'run_route_fix.js',     // Bug3/4 外勤/冰庫貼回路由
   'run_task7.js',         // Task7 回覆防護/未填地點
   'run_stats_format.js',  // Task11+12 統計輸出格式
+  'run_bug5.js',          // Bug5 寄運誤判 + 補測
   'run_receivable.js',    // Task4 收款/未收款
   'run_outbound.js',      // Task5 出庫/庫存
 ];
