@@ -25,3 +25,9 @@
 - **D4.3 器材回收無條件否決收款（P0-1）**：`recvDetect` 一旦命中 收台/台回來/空籃/棧板回收 即 return null，**即使含「需收」等 RECV_KW 字**（「需收台回來」的「需收」會誤命中 RECV_KW）。此為修 [Task4] 首次跑測時 intent_guard D1 轉紅的根因；已加回歸案 2d。
 - **D4.4 去重雙軌 + 24h 窗（使用者調整）**：① sourceMessageId 完全去重（不限時間）；② 同客戶+金額+品項且非取消，**僅 24 小時內**視為重複。理由：客戶隔日的真實重複交易不得被誤判去重而漏帳。
 - **D4.5 取消＝軟刪除**：#取消收款 不刪列，改 status=取消 並填 deleted_at/deleted_by/reason，稽核可追蹤（呼應 Task8「取消保留 Log」）。
+
+## 開發紀律：#版本 build 識別（DISCIPLINE-VERSION）
+- **每次交付部署前，最後一個 commit 必須同步更新 `#版本`**：更新 `BOT_VERSION`、`BOT_BUILD`（最後 commit 短 hash）、`BOT_DATE`（見 `versionMessage()`）。
+- `#版本` 第一行固定格式：`📦 卡比集機器人 <版本> (<短hash>) <日期>`，讓部署後打 `#版本` 一眼確認是否新版。
+- 必備測試 `tests/golden/run_version.js`：驗證 `#版本` 回覆含當前版本字串（v3.0）＋ build 短 hash 樣式 ＋ 本輪重點 ＋ 不含舊版字串。全量回歸一併跑。
+- **build hash 回填慣例**：因 commit 無法在建立前得知自身 hash，採「版本 commit + 回填 commit」兩步：版本 commit 內 `BOT_BUILD` 先放上一交付 hash，再以一個 chore commit 回填為版本 commit 的短 hash。故 `#版本` 顯示的 hash＝版本 commit（回填 commit 的父），交付部署的是回填 commit（兩者僅差該字串）。

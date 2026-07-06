@@ -140,6 +140,21 @@ const MSG = '6986\n老人田 高山228 特8件 要收款6800元';
   check('11d 對調欄位已修正(客戶=6986)', un[0] && String(un[0][2]) === '6986' && String(un[0][3]) === '老人田', JSON.stringify(un[0]));
 })();
 
+/* ---------- 12. Bug6：清單保留收款人欄（未指定→建立人）---------- */
+(function () {
+  const env = mkEnv();
+  send(env, MSG);
+  const r = send(env, '#未收款');
+  check('12a 清單表頭含收款人', /金額｜收款人/.test(r), r);
+  check('12b 未指定收款人→顯示建立人', /建立人 /.test(r), r);
+  // 含收款人(collectedBy)的資料列 → 顯示「收款人 X」
+  const env2 = mkEnv();
+  env2.fns.getSheet('待收款').appendRow(['2026/07/01 10:00', '2026/07/01', '6986', '老人田', '高山228 特8件', 6800, '', '未收', '小明', '阿良', '', '', '', '', '', '', '', '']);
+  const r2 = env2.fns.receivableQuery(false);
+  check('12c 有收款人→清單顯示「收款人 阿良」', /收款人 阿良/.test(r2), r2);
+  check('12d #待辦 同走未收款清單', /收款人/.test(send(env, '#待辦')), '');
+})();
+
 console.log('\n========== Task 4 收款/未收款 模組 回歸測試 ==========\n');
 console.log(out.join('\n'));
 console.log('\n--------------------------------------------------');

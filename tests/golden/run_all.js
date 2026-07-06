@@ -11,6 +11,7 @@ const DIR = __dirname;
 
 // 全綠型套件（exit 0 = 通過）
 const SUITES = [
+  'run_version.js',       // #版本 build 識別
   'run_security.js',      // Task1/8 安全
   'run_task8.js',         // Task8 去重/fail-closed
   'run_emp_norm.js',      // Task6 員工正規化

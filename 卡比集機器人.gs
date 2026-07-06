@@ -20,6 +20,21 @@ const SHEET_RETURN   = '退貨紀錄';
 const SHEET_TARE     = '空車重量';
 const SHEET_DUTY     = '外勤補貼';
 const SHEET_RECEIVABLE = '待收款';   // Task4 收款/未收款（含軟刪除稽核）
+// 版本識別：交付部署前務必更新 BOT_VERSION / BOT_BUILD(最後 commit 短hash) / BOT_DATE（見 DECISIONS 開發紀律）
+var BOT_VERSION = 'v3.0';
+var BOT_BUILD = 'e53116d';
+var BOT_DATE = '2026/07/06';
+function versionMessage() {
+  return '📦 卡比集機器人 ' + BOT_VERSION + ' (' + BOT_BUILD + ') ' + BOT_DATE + '\n本輪重點修復：\n' +
+    '【意圖判斷層】收台≠收款、聊天/填充詞不建寄運、引用(Line Quote)訊息唯讀\n' +
+    '【群組權限】市場群唯讀、# 設定限老闆、#註冊老闆防搶注＋#轉移老闆\n' +
+    '【收款/待收款】新模組：偵測建立→#已收→#取消收款(軟刪除留Log)；清單顯 R 編號、多筆命中需指定\n' +
+    '【出勤】別名合併(良=阿良、宏欸4:07=宏欸)；出勤統計/綜合評比 新簡表＋明細版\n' +
+    '【冰庫】查詢結果貼回可直接加「出N/修改N/取消」執行；純貼回仍防呆不寫入\n' +
+    '【寄運誤判防呆】指示句/物流商不當客戶、判不出客戶不亂寫(fail-closed)、數字客戶白名單\n' +
+    '【安全】事件去重、高危操作 fail-closed 限老闆\n' +
+    '你看到這行＝最新程式已生效（對照上方版本＋hash 即可確認是否新版）。';
+}
 const FONT_SIZE = 18;
 
 const PROPS = PropertiesService.getScriptProperties();
@@ -90,7 +105,7 @@ function handleEvent(event) {
     else replyToLine(replyToken, '訊息紀錄目前只有 ' + Math.max(0, last - 1) + ' 則，不需要清理。');
     return;
   }
-  if (text === '#版本') { replyToLine(replyToken, '✅ 卡比集機器人 v2.58\n本次修復：\n【Bug1寄運誤判】1828／首行純數字不再被誤記為寄運（一般交易不建立寄運資料）\n【前版P0冰庫】冰庫查詢結果貼回不再被誤判成「鐵架格式錯誤」；無「鐵」的品項/庫存內容不進鐵架\n【鐵架】分隔符全支援、客戶名收、不超收；名稱含「鐵」即可；收回容錯比對\n【寄運】「寄旭陽（修清）」物流/備註分離；📍備註行尾「取消」不再誤刪整筆\n【速度】寫入鎖縮5秒、查詢不上鎖\n你看到這行＝最新程式已生效。'); return; }
+  if (text === '#版本') { replyToLine(replyToken, versionMessage()); return; }
   if (text === '#設定工作群組') { if (!ownerGate(source, replyToken)) return; addWorkGroup(chatId); replyToLine(replyToken, '✅ 已把「這個群組」設為工作群組。\n目前工作群組數：' + getWorkGroups().length); return; }
   if (text === '#取消工作群組') { if (!ownerGate(source, replyToken)) return; removeWorkGroup(chatId); replyToLine(replyToken, '已把這個群組移出工作群組。\n目前工作群組數：' + getWorkGroups().length); return; }
   // ★ 群組權限設定（老闆限定）
@@ -585,7 +600,7 @@ function handleEvent(event) {
   }
 
   /* ---- 待收款 / 收款追蹤（Task4）：查詢 / 結案 / 取消(軟刪) / 自動偵測建立 ---- */
-  if (/^#(待收款|未收款|今日待收款|今日收款)\s*$/.test(text)) { replyToLine(replyToken, receivableQuery(/今日/.test(text))); return; }
+  if (/^#(待收款|未收款|今日待收款|今日收款|待辦)\s*$/.test(text)) { replyToLine(replyToken, receivableQuery(/今日/.test(text))); return; }
   if (/^#收款明細\s*$/.test(text)) { replyToLine(replyToken, receivableDetail()); return; }
   if (/^#已收\s+/.test(text)) {
     let body = text.replace(/^#已收\s+/, '').trim(); let all = false;
@@ -3109,10 +3124,12 @@ function receivableQuery(todayOnly) {
     if (String(data[i][7]) !== '未收' || data[i][15]) continue;
     if (todayOnly && ymdStr(data[i][0]) !== today) continue;
     const amt = Number(data[i][5]) || 0; total += amt;
-    rows.push(recvRowId(i) + '｜' + (data[i][2] || '') + (data[i][3] ? '／' + data[i][3] : '') + '｜' + (data[i][4] || '') + '｜' + amt + ' 元' + (data[i][9] ? '｜收款人 ' + data[i][9] : ''));
+    // Bug6：保留「收款人」欄；未指定收款人時顯示「建立人 X」（沿用原規格）
+    const who = data[i][9] ? ('收款人 ' + data[i][9]) : ('建立人 ' + (data[i][8] || '未填'));
+    rows.push(recvRowId(i) + '｜' + (data[i][2] || '') + (data[i][3] ? '／' + data[i][3] : '') + '｜' + (data[i][4] || '') + '｜' + amt + ' 元｜' + who);
   }
   if (!rows.length) return '📋 目前沒有未收款。';
-  return '📋 未收款清單' + (todayOnly ? '（今日）' : '') + '（' + rows.length + ' 筆）：\nID｜客戶／供應商｜品項｜金額\n' + rows.join('\n') + '\n――――――\n合計未收：' + total + ' 元\n（結案：#已收 R編號｜取消：#取消收款 R編號）';
+  return '📋 未收款清單' + (todayOnly ? '（今日）' : '') + '（' + rows.length + ' 筆）：\nID｜客戶／供應商｜品項｜金額｜收款人\n' + rows.join('\n') + '\n――――――\n合計未收：' + total + ' 元\n（結案：#已收 R編號｜取消：#取消收款 R編號）';
 }
 function receivableDetail() {
   const data = recvSheet().getDataRange().getValues(); const rows = [];
