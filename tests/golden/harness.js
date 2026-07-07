@@ -76,6 +76,12 @@ const EXPORT_NAMES = [
   'receivableDetail',
   'recvCleanup',
   'recvRowId',
+  // ---- 每日試算表備份（DriveApp/ScriptApp；純邏輯可測，實際 Drive 操作以 mock 驗證）----
+  'dailyBackup',
+  'setupBackupTrigger',
+  'backupFileName',
+  'isBackupFileName',
+  'backupsToDelete',
 ];
 
 /* ------------------------------------------------------------------ */
@@ -229,6 +235,53 @@ function createEnv() {
     getLog() { return loggerCalls.join('\n'); },
   };
 
+  /* ---- DriveApp mock（stateful，供 dailyBackup 測試；不連真 Drive）---- */
+  let __driveSeq = 0;
+  function makeDriveFile(fname) {
+    __driveSeq += 1; const created = __driveSeq;
+    const f = {
+      __name: fname, __created: created, __trashed: false,
+      getName() { return f.__name; },
+      getId() { return 'file-' + created; },
+      getDateCreated() { return { getTime() { return f.__created; } }; },
+      setTrashed(t) { f.__trashed = !!t; return f; },
+      makeCopy(copyName, targetFolder) { if (driveState.failCopy) throw new Error('mock Drive makeCopy 失敗'); const c = makeDriveFile(copyName); targetFolder.__files.push(c); return c; },
+    };
+    return f;
+  }
+  function makeDriveFolder(name) {
+    const folder = {
+      __name: name, __files: [],
+      getName() { return name; },
+      getId() { return 'folder-' + name; },
+      getFiles() { const live = folder.__files.filter(function (x) { return !x.__trashed; }); let i = 0; return { hasNext() { return i < live.length; }, next() { return live[i++]; } }; },
+    };
+    return folder;
+  }
+  const driveState = { folders: [], filesById: Object.create(null) };
+  const DriveApp = {
+    getFoldersByName(n) { const m = driveState.folders.filter(function (f) { return f.__name === n; }); let i = 0; return { hasNext() { return i < m.length; }, next() { return m[i++]; } }; },
+    createFolder(n) { const f = makeDriveFolder(n); driveState.folders.push(f); return f; },
+    getFileById(id) { if (!driveState.filesById[id]) driveState.filesById[id] = makeDriveFile('SOURCE_' + id); return driveState.filesById[id]; },
+  };
+
+  /* ---- ScriptApp mock（觸發器，供 setupBackupTrigger 測試）---- */
+  const triggers = [];
+  const ScriptApp = {
+    getProjectTriggers() { return triggers.slice(); },
+    newTrigger(fn) {
+      const spec = { fn: fn, hour: null, minute: null, days: null };
+      const builder = {
+        timeBased() { return builder; },
+        everyDays(n) { spec.days = n; return builder; },
+        atHour(h) { spec.hour = h; return builder; },
+        nearMinute(m) { spec.minute = m; return builder; },
+        create() { const t = { __spec: spec, getHandlerFunction() { return fn; } }; triggers.push(t); return t; },
+      };
+      return builder;
+    },
+  };
+
   function pad(n) { return String(n).padStart(2, '0'); }
   const Utilities = {
     // 極簡日期格式化：足以支撐 nowStr / ymdStr 等（測試不對時間值做斷言）
@@ -269,15 +322,17 @@ function createEnv() {
   const factory = new Function(
     'SpreadsheetApp', 'PropertiesService', 'LockService', 'UrlFetchApp',
     'ContentService', 'CacheService', 'Logger', 'Utilities', 'console',
+    'DriveApp', 'ScriptApp',
     src + returnStmt
   );
 
   const fns = factory(
     SpreadsheetApp, PropertiesService, LockService, UrlFetchApp,
-    ContentService, CacheService, Logger, Utilities, mockConsole
+    ContentService, CacheService, Logger, Utilities, mockConsole,
+    DriveApp, ScriptApp
   );
 
-  return { fns, props, sheets, urlFetchCalls, loggerCalls, consoleErrors, scriptProps };
+  return { fns, props, sheets, urlFetchCalls, loggerCalls, consoleErrors, scriptProps, driveState, triggers };
 }
 
 module.exports = { createEnv, GS_PATH, EXPORT_NAMES };

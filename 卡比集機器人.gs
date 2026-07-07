@@ -34,6 +34,7 @@ function versionMessage() {
     '【寄運定義收緊】只有「寄X物流指定」或「客戶在物流客戶名單」才記寄運；指示句/物流商不當客戶(fail-closed)\n' +
     '【安全】事件去重、高危操作 fail-closed 限老闆\n' +
     '【安靜模式】改為分群獨立：#安靜／#取消安靜 僅本群組；老闆 #全部安靜／#全部取消安靜 管全部；安靜時「無法判斷指令」提示靜默(功能回覆與寫入不受影響)\n' +
+    '【每日備份】dailyBackup：每日 23:30 自動複製整份試算表到 Drive「卡比集機器人備份」，保留最近 14 份(需部署後執行 setupBackupTrigger 啟用一次)\n' +
     '你看到這行＝最新程式已生效（對照上方版本＋hash 即可確認是否新版）。';
 }
 const FONT_SIZE = 18;
@@ -3627,4 +3628,69 @@ function setupAll() {
     if (s) formatSheet(s, headerFor(name).length);
   });
   Logger.log('setupAll 完成！');
+}
+
+/* ========================== 【每日試算表自動備份（DriveApp）】 ==========================
+ * dailyBackup()：把整份試算表複製到 Drive「卡比集機器人備份」資料夾，檔名含日期；保留最近 14 份。
+ * setupBackupTrigger()：手動執行一次，建立每日觸發器（約 23:30）。已存在則不重複建立。
+ * 安全：清理只刪「本備份資料夾內、檔名符合本命名規則」的檔，絕不碰其他檔案。
+ * 純函式（backupFileName/isBackupFileName/backupsToDelete）已納入 golden tests；實際 Drive 操作部署後手動驗證。
+ */
+const BACKUP_FOLDER_NAME = '卡比集機器人備份';
+const BACKUP_PREFIX = '卡比集總管_backup_';
+const BACKUP_KEEP = 14;
+
+function backupFileName(d) { return BACKUP_PREFIX + Utilities.formatDate(d || new Date(), 'Asia/Taipei', 'yyyy-MM-dd'); }
+function isBackupFileName(name) { return new RegExp('^' + BACKUP_PREFIX + '\\d{4}-\\d{2}-\\d{2}$').test(String(name || '')); }
+
+// 純函式：給定資料夾內檔案清單（{name, created}），回傳「命名符合規則且超過保留數、應刪除」者（最舊優先）。
+// 只考慮命名符合規則者；其餘一律忽略（safety：絕不刪非備份檔）。
+function backupsToDelete(files, keep) {
+  keep = keep || BACKUP_KEEP;
+  const ours = (files || []).filter(function (f) { return isBackupFileName(f.name); });
+  ours.sort(function (a, b) {                         // 新 → 舊
+    const ca = Number(a.created || 0), cb = Number(b.created || 0);
+    if (cb !== ca) return cb - ca;
+    return String(b.name).localeCompare(String(a.name));
+  });
+  return ours.slice(keep);                            // 保留前 keep 份，其餘（最舊）刪除
+}
+
+function getBackupFolder_() {
+  const it = DriveApp.getFoldersByName(BACKUP_FOLDER_NAME);
+  if (it.hasNext()) return it.next();
+  Logger.log('備份資料夾不存在，建立「' + BACKUP_FOLDER_NAME + '」。');
+  return DriveApp.createFolder(BACKUP_FOLDER_NAME);
+}
+
+function dailyBackup() {
+  try {
+    const folder = getBackupFolder_();
+    const name = backupFileName(new Date());
+    DriveApp.getFileById(SHEET_ID).makeCopy(name, folder);   // 複製整份試算表到備份資料夾
+    // 蒐集資料夾內「本規則」備份檔，超過保留數則刪最舊者（只碰自己的備份檔）
+    const entries = [];
+    const fit = folder.getFiles();
+    while (fit.hasNext()) { const f = fit.next(); if (isBackupFileName(f.getName())) entries.push({ name: f.getName(), created: f.getDateCreated().getTime(), file: f }); }
+    const toDelete = backupsToDelete(entries, BACKUP_KEEP);
+    let removed = 0;
+    toDelete.forEach(function (e) { try { e.file.setTrashed(true); removed++; } catch (err) { Logger.log('刪除舊備份失敗：' + e.name + '｜' + err); } });
+    const kept = entries.length - removed;
+    Logger.log('✅ dailyBackup 完成：新增「' + name + '」；備份共 ' + entries.length + ' 份，清理 ' + removed + ' 份，保留 ' + kept + ' 份。');
+    return { ok: true, name: name, kept: kept, removed: removed };
+  } catch (e) {
+    const msg = (e && e.message) || e;
+    Logger.log('❌ dailyBackup 失敗：' + msg);
+    try { notifyOwner('⚠️ 今日試算表備份失敗：' + msg + '\n請工程端檢查 Drive 權限或空間（手冊：docs/備份與還原手冊.md）。'); } catch (err) { }
+    return { ok: false, error: String(msg) };
+  }
+}
+
+// 手動執行一次即可：建立每日備份觸發器（約 23:30，避開整點尖峰）。已存在同 handler 則不重複建立。
+function setupBackupTrigger() {
+  const exists = ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'dailyBackup'; });
+  if (exists) { Logger.log('已存在 dailyBackup 觸發器，不重複建立。'); return { created: false }; }
+  ScriptApp.newTrigger('dailyBackup').timeBased().everyDays(1).atHour(23).nearMinute(30).create();
+  Logger.log('✅ 已建立每日 dailyBackup 觸發器（約 23:30）。');
+  return { created: true };
 }

@@ -41,6 +41,14 @@
 - **D-QUIET.4 相容遷移＝乾淨起點**：舊全域 `QUIET` 鍵**不再讀取**；若正式環境原本為開啟，遷移後視為未開（乾淨起點），老闆需重打 `#安靜`/`#全部安靜`。理由：新舊語義不同（全域 total-silence → 只壓雜訊），乾淨起點最安全、最不易誤判。
 - **測試**：新增 `tests/golden/run_quiet.js`（22 案，涵蓋 spec a~e）。既有 `run_security.js` 2.2「老闆開安靜成功」斷言由舊 `QUIET==='1'` 改為驗「當前群組已入 QUIET_GROUPS」（合法行為變更，非弱化，依鐵律 rule 6 記錄）。全量 235/235 綠。
 
+## 每日試算表自動備份（D-BACKUP，KNOWN_ISSUES 延後項補做）
+- **範圍**：只補「備份保險」，不動任何既有功能程式碼。新增 `dailyBackup()`／`setupBackupTrigger()`＋純函式 helper，附文件 `docs/備份與還原手冊.md`、`docs/verify_sync.md`。
+- **D-BACKUP.1 用 DriveApp 複製整份試算表**：`dailyBackup()` 把 `SHEET_ID` 複製到 Drive 資料夾「卡比集機器人備份」（不存在自動建），檔名 `卡比集總管_backup_YYYY-MM-DD`。
+- **D-BACKUP.2 保留 14 份、只刪自己的備份（safety）**：清理僅刪「該備份資料夾內、檔名符合 `^卡比集總管_backup_\d{4}-\d{2}-\d{2}$`」且超過 14 份的最舊者，`isBackupFileName` 嚴格把關，**絕不碰其他任何檔案**。刪除用 `setTrashed(true)`（進垃圾桶可救回，非永久刪）。
+- **D-BACKUP.3 觸發器 23:30、冪等**：`setupBackupTrigger()` 建每日觸發器（`atHour(23).nearMinute(30)`，避開整點尖峰）；已存在同 handler 則不重複建立。需部署後在 GAS 手動執行一次並授權 Drive。
+- **D-BACKUP.4 失敗通知老闆**：`dailyBackup()` try/catch，成功/清理份數 `Logger.log`；失敗 `notifyOwner('⚠️ 今日試算表備份失敗…')` 並回 `{ok:false}`。
+- **D-BACKUP.5 測試策略**：純邏輯（命名、保留刪除判斷）＋以 harness 新增的 DriveApp/ScriptApp mock 做端到端（自動建資料夾/複製/清理超量/不碰非備份檔/失敗通知/觸發器冪等）＝ `tests/golden/run_backup.js`（23 案）。**真實 Drive API 的實際複製/刪除/權限**依 spec 由部署後在 GAS 手動執行 `dailyBackup`／`setupBackupTrigger` 驗證。harness 注入 `DriveApp`/`ScriptApp` 兩個 mock，對既有測試零影響（多注入參數、既有碼未用）。全量 258/258 綠。
+
 ## 開發紀律：#版本 build 識別（DISCIPLINE-VERSION）
 - **每次交付部署前，最後一個 commit 必須同步更新 `#版本`**：更新 `BOT_VERSION`、`BOT_BUILD`（最後 commit 短 hash）、`BOT_DATE`（見 `versionMessage()`）。
 - `#版本` 第一行固定格式：`📦 卡比集機器人 <版本> (<短hash>) <日期>`，讓部署後打 `#版本` 一眼確認是否新版。

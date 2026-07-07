@@ -25,6 +25,7 @@ const SUITES = [
   'run_receivable.js',    // Task4 收款/未收款
   'run_outbound.js',      // Task5 出庫/庫存
   'run_quiet.js',         // 安靜模式：分群獨立 + 全域 + unknown 提示尊重安靜
+  'run_backup.js',        // 每日試算表自動備份 dailyBackup（命名/保留14份/觸發器）
 ];
 
 let totalPass = 0, totalCount = 0, hardFail = 0;
