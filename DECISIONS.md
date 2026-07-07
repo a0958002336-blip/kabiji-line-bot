@@ -33,6 +33,14 @@
 - 實作：新增 `allCarrierCustomers()`/`isShippingRecord()`；handleEvent 寄運區把 `ship.records` 過濾為合格者才寫寄運，`pack=台子` 品項一律記台子出庫。
 - **測試預期調整（依鐵律記錄）**：`run_intent_guard` 之 D1（漢光30件無寄）由「寄運1」改「寄運0」；G1 由「3088無寄→寄運」改「3088+寄旭陽→寄運」。理由：業務定義變更，非弱化測試。新增 `run_ship_rule.js` 5 案。
 
+## 安靜模式：分群獨立 + 全域開關 + unknown 提示尊重安靜（D-QUIET，授權解凍）
+- **背景**：員工在群裡打日常出貨速記（如「招遠出20件河初秋」），機器人不寫入是正確的，但每句回「⚠️ 無法判斷指令」造成洗版。**判定/寫入邏輯完全不動，只改回覆行為。**
+- **D-QUIET.1 分群獨立**：`QUIET` 由全域單一開關改為 per-群組。新鍵 `QUIET_GROUPS`（逗號清單）。`#安靜`／`#取消安靜` 只把「當前群組」加入/移出清單（`addQuietGroup`/`removeQuietGroup`），回覆註明「本群組」。仍沿用 `ownerGate`（維持原限老闆，未放寬權限）。
+- **D-QUIET.2 全域開關**：新增老闆專用 `#全部安靜`／`#全部取消安靜`（`ownerGate`／isAdmin 檢查），設 `QUIET_ALL`。`quiet(chatId)` = `QUIET_ALL===1` 或 `chatId ∈ QUIET_GROUPS`。
+- **D-QUIET.3 quiet 只壓 unknown/非必要提示，不壓功能回覆（依 spec）**：`quiet(chatId)` 僅套用於 4 個「雜訊」輸出——「⚠️ 無法判斷指令」(借支 fail-closed／寄運 unresolved 兩處)、「⚠️ 無法確認指令」、冰庫純貼回防呆通知。**所有功能回覆（寄運/台子/鐵架/冰庫/收款寫入確認、打卡確認、查詢結果）改為無條件回覆**（移除既有 18 處 `if(!quiet())` 包裹）。理由：spec 明列「安靜只壓 unknown 與非必要提示，不壓功能回覆」，且測試案例(d) 要求安靜群內 查冰庫/#待收款/打卡 照常回覆。因既有黃金測試皆未開安靜，此移除對 quiet=off 情境行為完全不變（`!quiet()` 原本恆為 true），零回歸。
+- **D-QUIET.4 相容遷移＝乾淨起點**：舊全域 `QUIET` 鍵**不再讀取**；若正式環境原本為開啟，遷移後視為未開（乾淨起點），老闆需重打 `#安靜`/`#全部安靜`。理由：新舊語義不同（全域 total-silence → 只壓雜訊），乾淨起點最安全、最不易誤判。
+- **測試**：新增 `tests/golden/run_quiet.js`（22 案，涵蓋 spec a~e）。既有 `run_security.js` 2.2「老闆開安靜成功」斷言由舊 `QUIET==='1'` 改為驗「當前群組已入 QUIET_GROUPS」（合法行為變更，非弱化，依鐵律 rule 6 記錄）。全量 235/235 綠。
+
 ## 開發紀律：#版本 build 識別（DISCIPLINE-VERSION）
 - **每次交付部署前，最後一個 commit 必須同步更新 `#版本`**：更新 `BOT_VERSION`、`BOT_BUILD`（最後 commit 短 hash）、`BOT_DATE`（見 `versionMessage()`）。
 - `#版本` 第一行固定格式：`📦 卡比集機器人 <版本> (<短hash>) <日期>`，讓部署後打 `#版本` 一眼確認是否新版。

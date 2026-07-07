@@ -24,6 +24,7 @@ const SUITES = [
   'run_ship_rule.js',     // 寄運定義收緊(業務規則)
   'run_receivable.js',    // Task4 收款/未收款
   'run_outbound.js',      // Task5 出庫/庫存
+  'run_quiet.js',         // 安靜模式：分群獨立 + 全域 + unknown 提示尊重安靜
 ];
 
 let totalPass = 0, totalCount = 0, hardFail = 0;

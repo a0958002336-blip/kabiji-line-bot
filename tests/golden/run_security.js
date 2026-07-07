@@ -53,7 +53,8 @@ function send(env, text, userId) {
   check('2.1 老闆新增貨主成功', /已新增貨主/.test(r) && (env.scriptProps.getProperty('VENDORS') || '').indexOf('旭陽新貨主') !== -1, 'reply=' + r);
   const env2 = mkEnv(true);
   const r2 = send(env2, '#安靜', OWNER);
-  check('2.2 老闆開安靜成功', /安靜/.test(r2) && env2.scriptProps.getProperty('QUIET') === '1', 'reply=' + r2);
+  // 安靜改為分群獨立：#安靜 只把「當前群組」加入 QUIET_GROUPS（見 DECISIONS D-QUIET），非再設全域 QUIET。
+  check('2.2 老闆開安靜成功（本群組）', /安靜/.test(r2) && (env2.scriptProps.getProperty('QUIET_GROUPS') || '').split(',').indexOf(G) !== -1, 'reply=' + r2);
 })();
 
 /* ---------- 3. #註冊老闆 搶注防護 ---------- */
