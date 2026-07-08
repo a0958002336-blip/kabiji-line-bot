@@ -82,6 +82,13 @@ const EXPORT_NAMES = [
   'backupFileName',
   'isBackupFileName',
   'shouldRemindCleanup',
+  // ---- v3.1：收款人指定 / 鐵架代號制 ----
+  'receivableAssign',
+  'nextRackCode',
+  'rackNet',
+  'handleRackCodeCollect',
+  'migrateRackCodes',
+  'rackOutstanding',
 ];
 
 /* ------------------------------------------------------------------ */

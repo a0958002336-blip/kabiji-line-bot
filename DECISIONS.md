@@ -50,6 +50,14 @@
 - **D-BACKUP.5 測試策略**：純邏輯（命名、保留刪除判斷）＋以 harness 新增的 DriveApp/ScriptApp mock 做端到端（自動建資料夾/複製/清理超量/不碰非備份檔/失敗通知/觸發器冪等）＝ `tests/golden/run_backup.js`（23 案）。**真實 Drive API 的實際複製/刪除/權限**依 spec 由部署後在 GAS 手動執行 `dailyBackup`／`setupBackupTrigger` 驗證。harness 注入 `DriveApp`/`ScriptApp` 兩個 mock，對既有測試零影響（多注入參數、既有碼未用）。全量 258/258 綠。
 - **D-BACKUP.6 改零新增權限版（2026/07/08，使用者回報 Drive 授權不彈出）**：使用者環境下 `DriveApp.*` 權限彈窗始終不出現（重執行/宣告 scopes/撤銷重授權皆失敗），導致 DriveApp 版備份無法啟用。→ 改用 `SpreadsheetApp.openById(SHEET_ID).copy(檔名)`，**僅需既有試算表權限、零新授權**；複本落「我的雲端硬碟」根目錄。自動刪舊檔需 DriveApp（會要新授權）故**移除自動清理**（刪 `backupsToDelete`/`getBackupFolder_`/`BACKUP_FOLDER_NAME`），改新增純函式 `shouldRemindCleanup` 做**每週一次 notifyOwner 提醒老闆手動整理**（獨立 try，絕不因提醒失敗而讓備份被判失敗）。觸發器/失敗通知不變。測試改寫 `run_backup.js`（25 案：命名、每週提醒判斷、copy 端到端、**斷言完全不碰 DriveApp**、失敗通知、觸發器冪等）；harness spreadsheet mock 加 `copy()`。全量 260/260 綠。手冊第五節/備份層清單同步為「My Drive 根目錄＋每週手動整理」。
 
+## v3.1 修正（D-V31，2026/07/08 授權解凍）
+- **範圍**：三個實測 bug。① 新增「指定收款人」功能（原無此功能，「收款人 林義祥」被 recvDetect 攔走回「讀不到金額」）；② `#已收`／`#取消收款` 免空格（`\s+`→`\s*`）＋空指令回教學不掉進 recvDetect；③ 鐵架由名稱比對改**代號制**。依附件「卡比集機器人_v3.1_修正包.md」12 點實作。
+- **D-V31.1 收款人指定**：新增 `receivableAssign(idKey,name)`——`收款人 名字`＝指定最新一筆「未指定收款人」的未收款（都指定過則取最新一筆未收）；`收款人 R0003 名字`＝指定該筆。寫「待收款」第 10 欄（index 9），姓名過 `normalizeEmployeeName`（SSOT）。入口 `/^#?收款人\s*([Rr]\d+)?\s*(\S{1,12})\s*$/` 放在 recvDetect 之前；recvDetect 開頭加 `if (/^#?收款人/) return null` 保險。
+- **D-V31.2 鐵架代號制**：`nextRackCode()`（PROPS `RACK_SEQ` 遞增，A..Z/AA..，**跳過含 X 的代號**避開乘號 x）；所有出庫寫入點（handleRackParenBatch/handleRackInlineOut/rackSlipStrict 出借/appendRackRecord+handleRackBatch）配代號存「鐵架庫存」第 2 欄（原「回報人」欄，改表頭「代號」）。`rackNet()` 雙軌：有代號依代號結算，無代號依 客戶|名稱 舊制；舊制被收成負數自動抵到同客戶同名稱代號紀錄（新舊混用相容）。`handleRackCodeCollect()` 解析 `a*2收回`/多筆/`a收回`＝全收，超收封頂＋警示，查無代號警示，殘留非代號 token（英文聊天）靜默放行。`migrateRackCodes()`＋`#鐵架轉代號`（ownerGate）把舊制未收回「入庫關舊＋帶代號出庫重開」，總數不變。
+- **D-V31.3 不動既有**：群組權限/安靜模式/引用唯讀/寄運/冰庫/台子/出勤/借支/評比/事件去重/每日備份一律不改；姓名走 SSOT；fail-closed/ownerGate 照舊。舊名稱式收回（貼查詢結果）保留可用。
+- **D-V31.4 測試**：新增 `tests/golden/run_v31.js`（34 案，handleEvent 級整合，含所有必過案例＋回歸）；`run_version.js` 斷言 v3.0→v3.1（版本 bump，非弱化）。全量 **294/294 綠**。
+- **D-V31.5 安靜警示點調查（不改碼）**：見 `docs/安靜模式警示點調查_v3.1.md`。結論：兩個「無法判斷指令」點（借支/寄運 unresolved）本就有 `!quiet(chatId)`，使用者仍跳提示係 **D-QUIET.4 設定遷移**（舊 QUIET 鍵失效，需重打 `#安靜`），非 bug。附「不受安靜管制的警示點」清單供老闆決定，本輪不動。
+
 ## 開發紀律：#版本 build 識別（DISCIPLINE-VERSION）
 - **每次交付部署前，最後一個 commit 必須同步更新 `#版本`**：更新 `BOT_VERSION`、`BOT_BUILD`（最後 commit 短 hash）、`BOT_DATE`（見 `versionMessage()`）。
 - `#版本` 第一行固定格式：`📦 卡比集機器人 <版本> (<短hash>) <日期>`，讓部署後打 `#版本` 一眼確認是否新版。

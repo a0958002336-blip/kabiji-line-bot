@@ -21,9 +21,9 @@ const SHEET_TARE     = '空車重量';
 const SHEET_DUTY     = '外勤補貼';
 const SHEET_RECEIVABLE = '待收款';   // Task4 收款/未收款（含軟刪除稽核）
 // 版本識別：交付部署前務必更新 BOT_VERSION / BOT_BUILD(最後 commit 短hash) / BOT_DATE（見 DECISIONS 開發紀律）
-var BOT_VERSION = 'v3.0';
+var BOT_VERSION = 'v3.1';
 var BOT_BUILD = '1c050ba';
-var BOT_DATE = '2026/07/07';
+var BOT_DATE = '2026/07/08';
 function versionMessage() {
   return '📦 卡比集機器人 ' + BOT_VERSION + ' (' + BOT_BUILD + ') ' + BOT_DATE + '\n本輪重點修復：\n' +
     '【意圖判斷層】收台≠收款、聊天/填充詞不建寄運、引用(Line Quote)訊息唯讀\n' +
@@ -35,6 +35,8 @@ function versionMessage() {
     '【安全】事件去重、高危操作 fail-closed 限老闆\n' +
     '【安靜模式】改為分群獨立：#安靜／#取消安靜 僅本群組；老闆 #全部安靜／#全部取消安靜 管全部；安靜時「無法判斷指令」提示靜默(功能回覆與寫入不受影響)\n' +
     '【每日備份】dailyBackup(零新增權限)：用試算表 copy 每日 23:30 複製整份試算表到雲端硬碟(檔名含日期)；不自動刪，每週提醒手動整理(留14份)。需部署後執行 setupBackupTrigger 啟用一次\n' +
+    '【v3.1 收款】新增指定收款人：收款人 名字（指最新一筆）／收款人 R0003 名字；#已收／#取消收款 空格可省（#取消收款R0003 也行）\n' +
+    '【v3.1 鐵架代號制】出鐵架自動配代號[A][B]…，收回打「a*2收回」(多筆 a*2 b*3收回；a收回=全收，不分大小寫)；舊資料 #鐵架轉代號(限老闆)；新舊混用自動對帳\n' +
     '你看到這行＝最新程式已生效（對照上方版本＋hash 即可確認是否新版）。';
 }
 const FONT_SIZE = 18;
@@ -108,6 +110,7 @@ function handleEvent(event) {
     return;
   }
   if (text === '#版本') { replyToLine(replyToken, versionMessage()); return; }
+  if (text === '#鐵架轉代號') { if (!ownerGate(source, replyToken)) return; const lg = migrateRackCodes(); replyToLine(replyToken, lg.length ? ('✅ 已為未收回鐵架配發代號 ' + lg.length + ' 筆：\n' + lg.join('\n') + '\n（之後收回請打代號，例：a*2收回）') : '目前沒有需要轉代號的未收回鐵架。'); return; }
   if (text === '#設定工作群組') { if (!ownerGate(source, replyToken)) return; addWorkGroup(chatId); replyToLine(replyToken, '✅ 已把「這個群組」設為工作群組。\n目前工作群組數：' + getWorkGroups().length); return; }
   if (text === '#取消工作群組') { if (!ownerGate(source, replyToken)) return; removeWorkGroup(chatId); replyToLine(replyToken, '已把這個群組移出工作群組。\n目前工作群組數：' + getWorkGroups().length); return; }
   // ★ 群組權限設定（老闆限定）
@@ -503,6 +506,11 @@ function handleEvent(event) {
     return;
   }
 
+  /* ---- 鐵架代號收回：a*2收回（多筆 a*2 b*3收回；a收回＝全收，代號不分大小寫）---- */
+  if (/^[a-zA-Z]/.test(text) && /收/.test(text)) {
+    const rc = handleRackCodeCollect(text);
+    if (rc.count > 0 || rc.reply) { replyToLine(replyToken, rc.reply); return; }
+  }
   /* ---- 鐵架輸入防呆（涵蓋【】/多行/單行）：名稱要含「鐵架」、零售商名稱一致，不合格直接擋下教學 ---- */
   {
     const rg = rackEntryGuard(text);
@@ -604,10 +612,16 @@ function handleEvent(event) {
   }
 
   /* ---- 待收款 / 收款追蹤（Task4）：查詢 / 結案 / 取消(軟刪) / 自動偵測建立 ---- */
+  /* ---- 指定收款人：收款人 林義祥（最新一筆未指定者）／收款人 R0003 林義祥（指定該筆）---- */
+  {
+    const rpm = text.match(/^#?收款人\s*([Rr]\d+)?\s*(\S{1,12})\s*$/);
+    if (rpm && rpm[2]) { replyToLine(replyToken, receivableAssign(rpm[1] || '', rpm[2])); return; }
+  }
   if (/^#(待收款|未收款|今日待收款|今日收款|待辦)\s*$/.test(text)) { replyToLine(replyToken, receivableQuery(/今日/.test(text))); return; }
   if (/^#收款明細\s*$/.test(text)) { replyToLine(replyToken, receivableDetail()); return; }
-  if (/^#已收\s+/.test(text)) {
-    let body = text.replace(/^#已收\s+/, '').trim(); let all = false;
+  if (/^#(已收|取消收款)\s*$/.test(text)) { replyToLine(replyToken, '格式：#已收 R編號（或客戶名）／#取消收款 R編號。打「#待收款」看清單。'); return; }
+  if (/^#已收/.test(text)) {
+    let body = text.replace(/^#已收\s*/, '').trim(); let all = false;
     if (/^全部\s+/.test(body)) { all = true; body = body.replace(/^全部\s+/, '').trim(); }
     const key = body.split(/\s+/)[0];
     const r = receivableClose(key, getDisplayName(chatId, source.userId), all);
@@ -616,8 +630,8 @@ function handleEvent(event) {
     else replyToLine(replyToken, '✅ 已收款結案 ' + r.done.length + ' 筆：\n' + r.done.map(function (x) { return x.id + '｜' + x.customer + (x.supplier ? '／' + x.supplier : '') + '｜' + x.amount + ' 元'; }).join('\n'));
     return;
   }
-  if (/^#取消收款\s+/.test(text)) {
-    let body = text.replace(/^#取消收款\s+/, '').trim(); let all = false;
+  if (/^#取消收款/.test(text)) {
+    let body = text.replace(/^#取消收款\s*/, '').trim(); let all = false;
     if (/^全部\s+/.test(body)) { all = true; body = body.replace(/^全部\s+/, '').trim(); }
     const mkey = body.match(/^(\S+)\s*(.*)$/); const key = mkey ? mkey[1] : body; const reason = mkey ? mkey[2].trim() : '';
     const r = receivableCancel(key, getDisplayName(chatId, source.userId), reason, all);
@@ -1614,32 +1628,25 @@ function handleFreezerCmd(text) {
 
 /* ========================== 【鐵架/台子 未收回】 ========================== */
 function rackOutstanding(filterCustomer) {
-  const data = getSheet(SHEET_RACK).getDataRange().getValues();
-  const net = {}; const order = [];
-  for (let i = 1; i < data.length; i++) {
-    const action = data[i][2], rackId = data[i][3] || '(未填編號)', qty = Number(data[i][4]) || 0, cust = data[i][5] || '(未填客戶)';
-    if (!action) continue;
-    const key = cust + '｜' + rackId;
-    if (!(key in net)) { net[key] = { cust: cust, rackId: rackId, n: 0 }; order.push(key); }
-    if (action === '出庫') net[key].n += qty;
-    else if (action === '入庫') net[key].n -= qty;
-  }
+  const net = rackNet();
   const byCust = {}; const custOrder = []; let totalOut = 0;
-  order.forEach(function (k) {
-    const o = net[k];
+  const push = function (o, code) {
     if (o.n <= 0) return;
     if (filterCustomer && String(o.cust).indexOf(filterCustomer) === -1) return;
     if (!(o.cust in byCust)) { byCust[o.cust] = []; custOrder.push(o.cust); }
-    byCust[o.cust].push(o);
+    byCust[o.cust].push({ code: code, rackId: o.rackId, n: o.n });
     totalOut += o.n;
-  });
+  };
+  net.codedOrder.forEach(function (c) { push(net.coded[c], c); });
+  net.legacyOrder.forEach(function (k) { push(net.legacy[k], ''); });
   if (custOrder.length === 0) return filterCustomer ? '🔧 「' + filterCustomer + '」目前沒有未收回的鐵架。' : '🔧 目前沒有客戶有未收回的鐵架，全部都收回來了 👍';
   let out = '🔧 鐵架未收回' + (filterCustomer ? '（' + filterCustomer + '）' : '（誰還沒還）') + '：';
   custOrder.forEach(function (c) {
     out += '\n\n【' + c + '】';
-    byCust[c].forEach(function (o) { out += '\n　' + o.rackId + ' ×' + o.n; });
+    byCust[c].forEach(function (o) { out += '\n　' + (o.code ? '[' + o.code + '] ' : '') + o.rackId + ' ×' + o.n; });
   });
   out += '\n\n📦 在外面共 ' + totalOut + ' 支';
+  out += '\n（收回：打「代號*數量收回」，例 a*2收回；多筆 a*2 b*3收回；沒代號的舊資料先打 #鐵架轉代號）';
   return out;
 }
 function taiziOutstanding() {
@@ -2184,7 +2191,8 @@ function commandSheet() {
     '【客戶停車/備註】', '・查 客戶名（停車）', '・查空車重量1856', '・客戶停車位置查詢', '',
     '【冰庫】', '・查冰庫　查冰庫 客戶名', '・查冰庫總庫存', '・整張寄冰：單據最後打「冰」或「寄冰」',
     '・貼查冰庫結果後，每項可加：出N(出貨)／修改N(改成N)／取消(歸0)', '・批次：第一行「修改庫存」→客戶→每行 品名 數量', '',
-    '【鐵架/台子】', '・查鐵架　查台子', '・出庫：客戶 鐵架名*數量（或整張送貨單）', '・收回：客戶 鐵架名 ×N 收（或 取消）', '',
+    '【鐵架/台子】', '・查鐵架　查台子', '・出庫：客戶 鐵架名*數量（系統自動配代號）', '・收回：代號*數量收回（例 a*2收回；多筆 a*2 b*3收回；a收回=全收）', '・舊資料轉代號：#鐵架轉代號（限老闆）', '',
+    '【收款】', '・#待收款／#收款明細', '・收款人 名字（指定最新一筆）／收款人 R0003 名字', '・#已收 R0003／#取消收款R0003（空格可省）', '',
     '【寄運】', '・退貨：[日期] 客戶 品名 退N台', '・記錄：把寄運單據貼上', '・拉出：旭陽寄運資料 6/20',
     '・取消：客戶：清除(整筆)／客戶：品名 數量 取消(單項)／寄運資料 清除 確定(全部)',
     '・場外增改：寄運 客戶：品名 數量(新增/設定)／+N(增)／-N(減)／修改N／取消', '',
@@ -2749,11 +2757,12 @@ function handleRackParenBatch(text) {
     });
   }
   if (entries.length === 0) return { count: 0, reply: '' };
+  entries.forEach(function (e) { e.code = nextRackCode(); });
   const sheet = getSheet(SHEET_RACK);
-  const rows = entries.map(function (e) { return [nowStr(), '', '出庫', e.rackId, e.qty, customer]; });
+  const rows = entries.map(function (e) { return [nowStr(), e.code, '出庫', e.rackId, e.qty, customer]; });
   sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 6).setValues(rows);
-  const lst = entries.map(function (e) { return '・' + e.rackId + ' ×' + e.qty; });
-  return { count: entries.length, reply: '🔧 出鐵架（' + customer + '，' + entries.length + ' 筆）：\n' + lst.join('\n') };
+  const lst = entries.map(function (e) { return '・[' + e.code + '] ' + e.rackId + ' ×' + e.qty; });
+  return { count: entries.length, reply: '🔧 出鐵架（' + customer + '，' + entries.length + ' 筆）：\n' + lst.join('\n') + '\n（收回打「' + entries[0].code.toLowerCase() + '*數量收回」）' };
 }
 function handleRackInlineOut(text) {
   const lines = String(text).split('\n').map(function (l) { return l.trim(); }).filter(function (l) { return l && !/^[-—─–_=]{3,}$/.test(l); });
@@ -2779,11 +2788,12 @@ function handleRackInlineOut(text) {
     }
   });
   if (entries.length === 0) return { count: 0, reply: '' };
+  entries.forEach(function (e) { e.code = nextRackCode(); });
   const sheet = getSheet(SHEET_RACK);
-  const rows = entries.map(function (e) { return [nowStr(), '', '出庫', e.rackId, e.qty, e.customer]; });
+  const rows = entries.map(function (e) { return [nowStr(), e.code, '出庫', e.rackId, e.qty, e.customer]; });
   sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 6).setValues(rows);
-  const lst = entries.map(function (e) { return '・' + e.customer + ' ' + e.rackId + ' ×' + e.qty; });
-  return { count: entries.length, reply: '🔧 出鐵架（' + entries.length + ' 筆）：\n' + lst.join('\n') };
+  const lst = entries.map(function (e) { return '・[' + e.code + '] ' + e.customer + ' ' + e.rackId + ' ×' + e.qty; });
+  return { count: entries.length, reply: '🔧 出鐵架（' + entries.length + ' 筆）：\n' + lst.join('\n') + '\n（收回打「' + entries[0].code.toLowerCase() + '*數量收回」）' };
 }
 function handleRackReturn(text) {
   const lines = String(text).split('\n').map(function (l) { return l.trim(); }).filter(Boolean);
@@ -2882,8 +2892,8 @@ function handleRackBatch(text) {
   const rows = [];
   entries.forEach(function (e) {
     const action = e.isOut ? '出庫' : '入庫';
-    appendRackRecord(action, e.p.rackId, e.p.qty, e.p.customer, !e.isOut);
-    rows.push('・' + (e.isOut ? '出' : '收') + ' ' + (e.p.rackId || '') + ' ×' + e.p.qty + ' ' + (e.p.customer || '(未填客戶)'));
+    const code = appendRackRecord(action, e.p.rackId, e.p.qty, e.p.customer, !e.isOut);
+    rows.push('・' + (code ? '[' + code + '] ' : '') + (e.isOut ? '出' : '收') + ' ' + (e.p.rackId || '') + ' ×' + e.p.qty + ' ' + (e.p.customer || '(未填客戶)'));
   });
   return { count: entries.length, reply: '✅ 已登記 ' + entries.length + ' 筆鐵架：\n' + rows.join('\n') };
 }
@@ -3000,9 +3010,10 @@ function rackSlipStrict(text) {
   }
   const sheet = getSheet(SHEET_RACK);
   if (!collect) {
-    const rows = items.map(function (it) { return [nowStr(), '', '出庫', it.name, it.qty, customer]; });
+    items.forEach(function (it) { it.code = nextRackCode(); });
+    const rows = items.map(function (it) { return [nowStr(), it.code, '出庫', it.name, it.qty, customer]; });
     sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 6).setValues(rows);
-    return { handled: true, reply: '🔧 出鐵架（' + customer + '，' + items.length + ' 筆）：\n' + items.map(function (it) { return '・' + it.name + ' ×' + it.qty; }).join('\n') + '\n（打「查' + customer + '鐵架」看狀況）' };
+    return { handled: true, reply: '🔧 出鐵架（' + customer + '，' + items.length + ' 筆）：\n' + items.map(function (it) { return '・[' + it.code + '] ' + it.name + ' ×' + it.qty; }).join('\n') + '\n（收回打「' + items[0].code.toLowerCase() + '*數量收回」）' };
   }
   const data = sheet.getDataRange().getValues(); const out = {};
   for (let i = 1; i < data.length; i++) {
@@ -3030,7 +3041,9 @@ function buildRackReply(action, p, remain) {
   return msg + '\n📦 目前剩餘總數：' + remain + ' 支';
 }
 function appendRackRecord(action, rackId, qty, customer, isIn) {
-  getSheet(SHEET_RACK).appendRow([nowStr(), '', action, rackId, qty, customer]);
+  const code = (action === '出庫') ? nextRackCode() : '';
+  getSheet(SHEET_RACK).appendRow([nowStr(), code, action, rackId, qty, customer]);
+  return code;
 }
 function appendFinanceRecord(customer, type, amount, content) { getSheet(SHEET_FINANCE).appendRow([nowStr(), customer, type, amount, content, '']); }
 
@@ -3057,6 +3070,7 @@ function recvParseAmount(text) {
 function recvDetect(text) {
   const t = String(text || '').trim();
   if (!t) return null;
+  if (/^#?收款人/.test(t)) return null;   // 指定收款人指令 → 非收款建立
   if (RECV_EQUIP.test(t)) return null;   // P0-1：含收台/空籃/棧板回收 → 器材收回，永不進收款（即使含「需收」等字）
   if (!RECV_KW.test(t)) return null;
   const amount = recvParseAmount(t);
@@ -3554,7 +3568,7 @@ function getSheet(name) {
   return sheet;
 }
 function headerFor(name) {
-  if (name === SHEET_RACK)    return ['時間', '回報人', '動作', '鐵架編號', '數量', '客戶'];
+  if (name === SHEET_RACK)    return ['時間', '代號', '動作', '鐵架編號', '數量', '客戶'];
   if (name === SHEET_TAIZI)   return ['時間', '回報人', '動作', '品項', '數量', '客戶'];
   if (name === SHEET_ATTEND)  return ['時間', '員工', '動作', '狀態', '回報人'];
   if (name === SHEET_FREEZER) return ['時間', '客戶', '品名', '動作', '數量', '該品項剩餘'];
@@ -3684,4 +3698,115 @@ function setupBackupTrigger() {
   ScriptApp.newTrigger('dailyBackup').timeBased().everyDays(1).atHour(23).nearMinute(30).create();
   Logger.log('✅ 已建立每日 dailyBackup 觸發器（約 23:30）。');
   return { created: true };
+}
+
+/* ========================== 【v3.1 新增：收款人指定 / 鐵架代號制】 ========================== */
+/* ---- 指定收款人：idKey 空＝最新一筆未指定收款人的未收款；idKey=Rxxxx＝指定該筆 ---- */
+function receivableAssign(idKey, name) {
+  const sheet = recvSheet(); const data = sheet.getDataRange().getValues();
+  const who = normalizeEmployeeName(name);
+  let target = -1;
+  if (idKey) {
+    const id = recvParseId(idKey);
+    if (id > 0 && id < data.length && String(data[id][7]) === '未收' && !data[id][15]) target = id;
+    if (target < 0) return '查無「' + idKey + '」的未收款（打「#待收款」看清單）。';
+  } else {
+    for (let i = data.length - 1; i >= 1; i--) { if (String(data[i][7]) === '未收' && !data[i][15] && !data[i][9]) { target = i; break; } }
+    if (target < 0) { for (let i = data.length - 1; i >= 1; i--) { if (String(data[i][7]) === '未收' && !data[i][15]) { target = i; break; } } }
+    if (target < 0) return '目前沒有未收款可指定收款人（打「#待收款」看清單）。';
+  }
+  const arr = sheet.getRange(target + 1, 1, 1, 18).getValues()[0];
+  arr[9] = who; recvUpdateRow(target + 1, arr);
+  return '✅ 已指定收款人：' + recvRowId(target) + '｜' + (arr[2] || '') + (arr[3] ? '／' + arr[3] : '') + '｜' + (Number(arr[5]) || 0) + ' 元 → 收款人 ' + who + '\n（收款完成請打「#已收 ' + recvRowId(target) + '」；指定其他筆：收款人 R編號 名字）';
+}
+/* ---- 鐵架代號：產生下一個代號（A、B…Z、AA…；跳過含 X 的代號，避免和乘號 x 混淆）---- */
+function nextRackCode() {
+  let n = parseInt(PROPS.getProperty('RACK_SEQ') || '0', 10);
+  let s = '';
+  do {
+    n++;
+    s = ''; let x = n;
+    while (x > 0) { x--; s = String.fromCharCode(65 + (x % 26)) + s; x = Math.floor(x / 26); }
+  } while (s.indexOf('X') !== -1);
+  PROPS.setProperty('RACK_SEQ', String(n));
+  return s;
+}
+/* ---- 鐵架淨額（代號制＋舊名稱制併存）：有代號依代號結算；無代號依 客戶|名稱 結算。
+ *      若無代號的收回把舊制扣成負數（新舊混用），自動抵到同客戶同名稱的代號紀錄。 ---- */
+function rackNet() {
+  const data = getSheet(SHEET_RACK).getDataRange().getValues();
+  const coded = {}; const codedOrder = [];
+  const legacy = {}; const legacyOrder = [];
+  for (let i = 1; i < data.length; i++) {
+    const action = data[i][2]; if (!action) continue;
+    const code = String(data[i][1] || '').trim().toUpperCase();
+    const rackId = data[i][3] || '(未填編號)'; const q = Number(data[i][4]) || 0; const cust = data[i][5] || '(未填客戶)';
+    if (code && /^[A-Z]{1,3}$/.test(code)) {
+      if (!coded[code]) { coded[code] = { code: code, cust: cust, rackId: rackId, n: 0 }; codedOrder.push(code); }
+      if (action === '出庫') { coded[code].n += q; coded[code].cust = cust; coded[code].rackId = rackId; }
+      else if (action === '入庫') coded[code].n -= q;
+    } else {
+      const k = cust + '｜' + rackId;
+      if (!legacy[k]) { legacy[k] = { cust: cust, rackId: rackId, n: 0 }; legacyOrder.push(k); }
+      if (action === '出庫') legacy[k].n += q; else if (action === '入庫') legacy[k].n -= q;
+    }
+  }
+  legacyOrder.forEach(function (k) {
+    const L = legacy[k];
+    if (L.n >= 0) return;
+    let deficit = -L.n;
+    codedOrder.forEach(function (c) {
+      if (deficit <= 0) return;
+      const o = coded[c];
+      if (o.n <= 0) return;
+      if (String(o.cust) !== String(L.cust) || String(o.rackId) !== String(L.rackId)) return;
+      const take = Math.min(o.n, deficit); o.n -= take; deficit -= take;
+    });
+    L.n = -deficit;
+  });
+  return { coded: coded, codedOrder: codedOrder, legacy: legacy, legacyOrder: legacyOrder };
+}
+/* ---- 鐵架代號收回：a*2收回（多筆 a*2 b*3收回；a收回＝該代號全收）---- */
+function handleRackCodeCollect(text) {
+  let t = String(text).replace(/\n/g, ' ').trim();
+  if (!/收/.test(t) || !/^[a-zA-Z]/.test(t)) return { count: 0, reply: '' };
+  const pairs = []; let hasQty = false; let valid = true;
+  t = t.replace(/([a-zA-Z]+?)\s*[*＊×xX]\s*(\d+)/g, function (_, c, q) { pairs.push({ code: c.toUpperCase(), qty: parseInt(q, 10) }); hasQty = true; return ' '; });
+  t = t.replace(/收回|收/g, ' ');
+  t.split(/[\s、,，]+/).filter(Boolean).forEach(function (tok) {
+    if (/^[a-zA-Z]{1,3}$/.test(tok)) pairs.push({ code: tok.toUpperCase(), qty: null });
+    else valid = false;   // 有非代號的字（英文聊天等）→ 整則不當代號收回
+  });
+  if (!valid || !pairs.length) return { count: 0, reply: '' };
+  const net = rackNet();
+  const sheet = getSheet(SHEET_RACK);
+  const rows = []; const lst = []; let cnt = 0; let anyFound = false;
+  pairs.forEach(function (p) {
+    const o = net.coded[p.code];
+    if (!o || o.n <= 0) { lst.push('・[' + p.code + '] ⚠️查無未收回（打「查鐵架」看代號）'); return; }
+    anyFound = true;
+    let amt = (p.qty == null) ? o.n : p.qty; let over = '';
+    if (amt > o.n) { over = '（⚠️要求收 ' + amt + ' 超過未收回 ' + o.n + '，只收 ' + o.n + '）'; amt = o.n; }
+    rows.push([nowStr(), p.code, '入庫', o.rackId, amt, o.cust]);
+    o.n -= amt; cnt++;
+    lst.push('・[' + p.code + '] ' + o.cust + ' ' + o.rackId + ' 收回 ' + amt + over + '，剩 ' + o.n);
+  });
+  if (!anyFound && !hasQty) return { count: 0, reply: '' };   // 純字母閒聊（如 ok 收）→ 靜默放行，不誤觸警示
+  if (rows.length) sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 6).setValues(rows);
+  return { count: cnt, reply: '🔧 收鐵架（代號）：\n' + lst.join('\n') };
+}
+/* ---- 一次性轉換：現有未收回的「舊名稱制」鐵架 → 配發代號（#鐵架轉代號 觸發，限老闆）---- */
+function migrateRackCodes() {
+  const net = rackNet();
+  const sheet = getSheet(SHEET_RACK); const rows = []; const log = [];
+  net.legacyOrder.forEach(function (k) {
+    const o = net.legacy[k];
+    if (o.n <= 0) return;
+    const code = nextRackCode();
+    rows.push([nowStr(), '', '入庫', o.rackId, o.n, o.cust]);      // 關掉舊名稱制那筆
+    rows.push([nowStr(), code, '出庫', o.rackId, o.n, o.cust]);    // 用代號重開同數量
+    log.push('[' + code + '] ' + o.cust + '｜' + o.rackId + ' ×' + o.n);
+  });
+  if (rows.length) sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 6).setValues(rows);
+  return log;
 }
