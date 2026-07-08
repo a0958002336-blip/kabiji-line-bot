@@ -22,7 +22,7 @@ const SHEET_DUTY     = '外勤補貼';
 const SHEET_RECEIVABLE = '待收款';   // Task4 收款/未收款（含軟刪除稽核）
 // 版本識別：交付部署前務必更新 BOT_VERSION / BOT_BUILD(最後 commit 短hash) / BOT_DATE（見 DECISIONS 開發紀律）
 var BOT_VERSION = 'v3.1';
-var BOT_BUILD = '1c050ba';
+var BOT_BUILD = '6048696';
 var BOT_DATE = '2026/07/08';
 function versionMessage() {
   return '📦 卡比集機器人 ' + BOT_VERSION + ' (' + BOT_BUILD + ') ' + BOT_DATE + '\n本輪重點修復：\n' +
