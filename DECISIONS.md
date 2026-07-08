@@ -58,6 +58,14 @@
 - **D-V31.4 測試**：新增 `tests/golden/run_v31.js`（34 案，handleEvent 級整合，含所有必過案例＋回歸）；`run_version.js` 斷言 v3.0→v3.1（版本 bump，非弱化）。全量 **294/294 綠**。
 - **D-V31.5 安靜警示點調查（不改碼）**：見 `docs/安靜模式警示點調查_v3.1.md`。結論：兩個「無法判斷指令」點（借支/寄運 unresolved）本就有 `!quiet(chatId)`，使用者仍跳提示係 **D-QUIET.4 設定遷移**（舊 QUIET 鍵失效，需重打 `#安靜`），非 bug。附「不受安靜管制的警示點」清單供老闆決定，本輪不動。
 
+## v3.2 修正（D-V32，2026/07/09 授權解凍）
+- **範圍**：三項。① 計價單日期戳（分群開關，仿 #安靜/QUIET_GROUPS）；② 代號收回允許客戶名前綴；③ 名稱式收回不得誤吞代號紀錄。
+- **D-V32.1 計價單日期戳**：新增 `dateStampOn/dateStampGroups/addDateStampGroup/removeDateStampGroup`（PROPS `DATESTAMP_GROUPS`）＋ `#開啟日期戳`/`#關閉日期戳`（ownerGate）/`#日期戳狀態`。觸發：訊息含 `/[\d,]+\s*[台件包箱Kk]?\s*[*＊×xX]\s*[\d,]+\s*=\s*[\d,]+/` 且非 #指令/非 isNoiseBlock/非 isShippingPullOutput → 若該群開啟則回「📅 yyyy/M/d」。**handler 置於寄運出貨單解析之前，且 return 攔下**：含 =金額 計價單**一律不進寄運/台子寫入**（修「119台*700=83,300」被 parseShipping 判「台」為台子而誤出庫 119）。訊息仍於前段 `logGroupMessage` 記錄，`summarizeAmount` 掃 `=金額` 不漏（已測）。
+- **D-V32.2 台子誤記為唯讀診斷、不自動改資料**：新增唯讀 `scanTaiziAnomalies()`＋`#台子異常掃描`（ownerGate），列出台子「出庫」≥30 的可疑列供人工核對。**依指示不自動更改任何資料**；真實清單需部署後在正式表執行（測試環境無正式資料）。
+- **D-V32.3 代號收回客戶名前綴**：`handleRackCodeCollect` 先剝開頭連續中文當 prefix（`彰化芬園B*1收回`），解析代號後若 prefix 與代號客戶名雙向 indexOf 都不中 → 警示「代號 X 屬於 YYY，與你打的客戶不符」跳過不收。handleEvent 入口放寬為 `(/^[a-zA-Z]/ || /[a-zA-Z]\s*[*＊×xX]\s*\d+\s*收/)`。
+- **D-V32.4 名稱式收回擋代號紀錄（行為變更，鐵律 rule6 記錄）**：新增 `codedOutstandingFor(cust,rackId)`（同客戶同名、有代號且淨額>0）。`handleRackReturn` collect 分支與 `rackSlipStrict` collect 遇到有代號紀錄 → 警示「此品項已有代號紀錄（[A]×N），請改用代號收回…」**不動帳**。背景：實際發生「祐昌慶鐵架 ×2」後加「收」把 [A] 的 4 支一起被全收（名稱式無數量=全收＋同名合併）。→ **既有 run_v31 ③12b（舊「名稱式收回抵扣代號＝總數變1」）已成無效操作，改斷言為「擋下、總數不變」並記此**；rackNet 相容抵扣（歷史遺留舊制入庫）改由 run_v32 ③4 直接驗，覆蓋不減。
+- **測試**：新增 `tests/golden/run_v32.js`（23 案）；`run_version` v3.1→v3.2。全量 **318/318 綠**。不動安靜/群組權限/引用唯讀/收款/寄運/冰庫/出勤/借支/評比/每日備份。
+
 ## 開發紀律：#版本 build 識別（DISCIPLINE-VERSION）
 - **每次交付部署前，最後一個 commit 必須同步更新 `#版本`**：更新 `BOT_VERSION`、`BOT_BUILD`（最後 commit 短 hash）、`BOT_DATE`（見 `versionMessage()`）。
 - `#版本` 第一行固定格式：`📦 卡比集機器人 <版本> (<短hash>) <日期>`，讓部署後打 `#版本` 一眼確認是否新版。

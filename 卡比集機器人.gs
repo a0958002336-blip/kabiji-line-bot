@@ -21,9 +21,9 @@ const SHEET_TARE     = '空車重量';
 const SHEET_DUTY     = '外勤補貼';
 const SHEET_RECEIVABLE = '待收款';   // Task4 收款/未收款（含軟刪除稽核）
 // 版本識別：交付部署前務必更新 BOT_VERSION / BOT_BUILD(最後 commit 短hash) / BOT_DATE（見 DECISIONS 開發紀律）
-var BOT_VERSION = 'v3.1';
+var BOT_VERSION = 'v3.2';
 var BOT_BUILD = '6048696';
-var BOT_DATE = '2026/07/08';
+var BOT_DATE = '2026/07/09';
 function versionMessage() {
   return '📦 卡比集機器人 ' + BOT_VERSION + ' (' + BOT_BUILD + ') ' + BOT_DATE + '\n本輪重點修復：\n' +
     '【意圖判斷層】收台≠收款、聊天/填充詞不建寄運、引用(Line Quote)訊息唯讀\n' +
@@ -37,6 +37,8 @@ function versionMessage() {
     '【每日備份】dailyBackup(零新增權限)：用試算表 copy 每日 23:30 複製整份試算表到雲端硬碟(檔名含日期)；不自動刪，每週提醒手動整理(留14份)。需部署後執行 setupBackupTrigger 啟用一次\n' +
     '【v3.1 收款】新增指定收款人：收款人 名字（指最新一筆）／收款人 R0003 名字；#已收／#取消收款 空格可省（#取消收款R0003 也行）\n' +
     '【v3.1 鐵架代號制】出鐵架自動配代號[A][B]…，收回打「a*2收回」(多筆 a*2 b*3收回；a收回=全收，不分大小寫)；舊資料 #鐵架轉代號(限老闆)；新舊混用自動對帳\n' +
+    '【v3.2 計價單日期戳】老闆 #開啟日期戳／#關閉日期戳／#日期戳狀態(分群)；開啟群傳「數量*單價=金額」計價單→回當日日期，且計價單一律不進寄運/台子(修「119台*700」誤判台子)\n' +
+    '【v3.2 鐵架】代號收回可帶客戶名前綴(彰化芬園B*1收回，客戶不符會擋)；名稱式收回遇已有代號紀錄→擋下請改代號，避免整批被誤收\n' +
     '你看到這行＝最新程式已生效（對照上方版本＋hash 即可確認是否新版）。';
 }
 const FONT_SIZE = 18;
@@ -111,6 +113,7 @@ function handleEvent(event) {
   }
   if (text === '#版本') { replyToLine(replyToken, versionMessage()); return; }
   if (text === '#鐵架轉代號') { if (!ownerGate(source, replyToken)) return; const lg = migrateRackCodes(); replyToLine(replyToken, lg.length ? ('✅ 已為未收回鐵架配發代號 ' + lg.length + ' 筆：\n' + lg.join('\n') + '\n（之後收回請打代號，例：a*2收回）') : '目前沒有需要轉代號的未收回鐵架。'); return; }
+  if (text === '#台子異常掃描') { if (!ownerGate(source, replyToken)) return; replyToLine(replyToken, scanTaiziAnomalies()); return; }
   if (text === '#設定工作群組') { if (!ownerGate(source, replyToken)) return; addWorkGroup(chatId); replyToLine(replyToken, '✅ 已把「這個群組」設為工作群組。\n目前工作群組數：' + getWorkGroups().length); return; }
   if (text === '#取消工作群組') { if (!ownerGate(source, replyToken)) return; removeWorkGroup(chatId); replyToLine(replyToken, '已把這個群組移出工作群組。\n目前工作群組數：' + getWorkGroups().length); return; }
   // ★ 群組權限設定（老闆限定）
@@ -161,6 +164,9 @@ function handleEvent(event) {
   if (text === '#全部取消安靜') { if (!ownerGate(source, replyToken)) return; PROPS.setProperty('QUIET_ALL', ''); replyToLine(replyToken, '🔊 已關閉全域安靜模式。'); return; }
   if (text === '#安靜') { if (!ownerGate(source, replyToken)) return; addQuietGroup(chatId); replyToLine(replyToken, '🤫 ✅ 本群組已開啟安靜模式。'); return; }
   if (text === '#取消安靜') { if (!ownerGate(source, replyToken)) return; removeQuietGroup(chatId); replyToLine(replyToken, '🔊 本群組已取消安靜模式。'); return; }
+  if (text === '#開啟日期戳') { if (!ownerGate(source, replyToken)) return; addDateStampGroup(chatId); replyToLine(replyToken, '📅 ✅ 本群組已開啟計價單日期戳'); return; }
+  if (text === '#關閉日期戳') { if (!ownerGate(source, replyToken)) return; removeDateStampGroup(chatId); replyToLine(replyToken, '📅 本群組已關閉計價單日期戳'); return; }
+  if (text === '#日期戳狀態') { replyToLine(replyToken, dateStampOn(chatId) ? '📅 本群組計價單日期戳：開啟中' : '📅 本群組計價單日期戳：關閉'); return; }
 
   // 一律記錄訊息供搜尋／統整（查詢類指令不記）
   if (!/^(#|中控總覽|中控總攬|今日總覽|今日總攬|總覽|總攬|中控|出外勤|查\s*外勤|外勤補貼|全部外勤|所有外勤|外勤全部|外勤紀錄|外勤記錄|外勤明細|外勤清單|今日送貨|當日送貨|送貨內容|送貨訊息|今日廢話|當日廢話|廢話內容|閒聊內容|今日閒聊|查廢話|發言次數|留言次數|發言統計|留言統計|發言排行|留言排行|誰發言|誰留言|查發言|查留言|客戶資訊|客戶停車|停車地點|停車位置|停車一覽|查詢|查全部停車|查所有停車|查地點|地點代號|地點清單|地點一覽|地址清單|指令表|指令|總指令|指令大全|指令查詢|查指令|幫助|功能表|搜尋|收尋|搜|件數|總件數|統整金額|統計金額|金額統整|統整|統計|冰庫庫存|冰庫總覽|查冰庫|冰庫設定|鐵架庫存|鐵架總覽|查鐵架|鐵架剩餘|查台子|台子總覽|台子剩餘|未收回台子|台子庫存|查改價|改價紀錄|改價查詢|查損耗|損耗紀錄|損耗查詢|查遲到|查請假|查上班|查下班|查員工出勤|查出勤|出勤查詢|出勤紀錄|出勤統計|查出勤統計|綜合評比|獎金評比|員工評比|評比|查\S*評比|今日鐵架|今天鐵架|鐵架記錄|今日冰庫|今天冰庫|冰庫記錄|拉出當日群組訊息|拉出群組訊息|當日群組訊息|今日群組訊息|當日訊息|今日訊息|拉訊息|拉出訊息|今日對話|當日對話)/.test(text)) logGroupMessage(text, source.userId, source.groupId || source.roomId);
@@ -506,8 +512,8 @@ function handleEvent(event) {
     return;
   }
 
-  /* ---- 鐵架代號收回：a*2收回（多筆 a*2 b*3收回；a收回＝全收，代號不分大小寫）---- */
-  if (/^[a-zA-Z]/.test(text) && /收/.test(text)) {
+  /* ---- 鐵架代號收回：a*2收回（多筆 a*2 b*3收回；a收回＝全收）；允許客戶名前綴：彰化芬園B*1收回 ---- */
+  if (/^[a-zA-Z]/.test(text) || /[a-zA-Z]\s*[*＊×xX]\s*\d+\s*收/.test(text)) {
     const rc = handleRackCodeCollect(text);
     if (rc.count > 0 || rc.reply) { replyToLine(replyToken, rc.reply); return; }
   }
@@ -653,6 +659,12 @@ function handleEvent(event) {
     }
   }
 
+  /* ---- 計價單日期戳（分群開關）＋ 含「=金額」計價單一律不進寄運/台子 ----
+   *   訊息已於前段 logGroupMessage 記錄（統整金額掃 =金額 不受影響）；此處只回日期戳並攔下寫入。 */
+  if (/[\d,]+\s*[台件包箱Kk]?\s*[*＊×xX]\s*[\d,]+\s*=\s*[\d,]+/.test(text) && !/^#/.test(text) && !isNoiseBlock(text) && !isShippingPullOutput(text)) {
+    if (dateStampOn(chatId)) replyToLine(replyToken, '📅 ' + Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy/M/d'));
+    return;   // 含 =金額 計價單：一律不得進寄運/台子寫入（避免「119台*700」把台判成台子誤出庫）
+  }
   /* ---- 寄運出貨單（含鐵架(鐵架*N)漏記修正）---- */
   if (/\d+\s*(?:件|台(?!子)|包|箱)/.test(text) && !/扣除|損耗|入庫|出庫|匯款|改\s*\d|[（(]\s*鐵架|收\s*$|【/.test(text)) {
     const ship = parseShipping(text);
@@ -770,6 +782,11 @@ function quiet(chatId) { if (PROPS.getProperty('QUIET_ALL') === '1') return true
 function quietGroups() { const raw = PROPS.getProperty('QUIET_GROUPS') || ''; return raw ? raw.split(',').filter(Boolean) : []; }
 function addQuietGroup(id) { if (!id) return; const list = quietGroups(); if (list.indexOf(id) === -1) list.push(id); PROPS.setProperty('QUIET_GROUPS', list.join(',')); }
 function removeQuietGroup(id) { const list = quietGroups().filter(function (x) { return x !== id; }); PROPS.setProperty('QUIET_GROUPS', list.join(',')); }
+// 計價單日期戳（分群開關）：寫法比照 quiet()。DATESTAMP_GROUPS=已開啟的群組清單。
+function dateStampOn(chatId) { return !!chatId && dateStampGroups().indexOf(chatId) !== -1; }
+function dateStampGroups() { const raw = PROPS.getProperty('DATESTAMP_GROUPS') || ''; return raw ? raw.split(',').filter(Boolean) : []; }
+function addDateStampGroup(id) { if (!id) return; const list = dateStampGroups(); if (list.indexOf(id) === -1) list.push(id); PROPS.setProperty('DATESTAMP_GROUPS', list.join(',')); }
+function removeDateStampGroup(id) { const list = dateStampGroups().filter(function (x) { return x !== id; }); PROPS.setProperty('DATESTAMP_GROUPS', list.join(',')); }
 function getWorkGroups() { const raw = PROPS.getProperty('WORK_GROUPS') || ''; return raw ? raw.split(',').filter(Boolean) : []; }
 function addWorkGroup(id) { const list = getWorkGroups(); if (list.indexOf(id) === -1) list.push(id); PROPS.setProperty('WORK_GROUPS', list.join(',')); }
 function removeWorkGroup(id) { const list = getWorkGroups().filter(function (x) { return x !== id; }); PROPS.setProperty('WORK_GROUPS', list.join(',')); }
@@ -2199,7 +2216,7 @@ function commandSheet() {
     '【出勤】', '・中控總覽（限老闆）', '・打卡：員工名＋上班／下班／遲到／請假', '・查員工出勤／查遲到／查請假／查上班／查下班', '・出勤統計／綜合評比（限老闆）', '・入職：員工名＋入職', '・借支：員工名＋借＋金額', '・外勤補貼：員工名＋出外勤＋地點', '',
     '【改價/損耗/匯款】', '・客戶 改價 內容', '・客戶 匯款 金額', '・對帳單貼上（扣除N件/改NNN元）', '・查改價　查損耗', '',
     '【群組權限（限老闆）】', '・#群組ID', '・#設為管理群組（這群可寫入）', '・#設為市場群組（這群唯讀）', '・#群組權限', '',
-    '【設定】', '・#版本　#設定客戶 名稱　#查客戶', '・#貨主名單／#新增貨主 X', '・#冰庫名單／#新增冰庫 X', '・#安靜／#取消安靜（僅本群組）', '・#全部安靜／#全部取消安靜（全部群組・限老闆）', '',
+    '【設定】', '・#版本　#設定客戶 名稱　#查客戶', '・#貨主名單／#新增貨主 X', '・#冰庫名單／#新增冰庫 X', '・#安靜／#取消安靜（僅本群組）', '・#全部安靜／#全部取消安靜（全部群組・限老闆）', '・#開啟日期戳／#關閉日期戳／#日期戳狀態（計價單回當日日期・限老闆）', '',
     '【清除（限老闆，要加「確定」）】', '・出勤 清除 確定／冰庫 清除 確定／台子 清除 確定／寄運資料 清除 確定', '・改價紀錄 清除 確定／損耗紀錄 清除 確定／冰庫總量 清除 確定', '',
     '（打「指令表」隨時叫出這張）'
   ].join('\n');
@@ -2828,7 +2845,7 @@ function handleRackReturn(text) {
     if (data[i][2] === '出庫') out[c][r] = (out[c][r] || 0) + q;
     else if (data[i][2] === '入庫') out[c][r] = (out[c][r] || 0) - q;
   }
-  const taiziRows = [], rackRows = [], lst = []; let cnt = 0;
+  const taiziRows = [], rackRows = [], lst = [], warns = []; let cnt = 0;
   const addRow = function (action, rackId, qty, customer) { const row = [nowStr(), '', action, rackId, qty, customer]; if (norm(rackId) === '台子') taiziRows.push(row); else rackRows.push(row); };
   // 客戶／品項比對：完全相同優先，找不到再退而求其次用「互相包含」容錯（與查詢一致，避免查得到卻收不到）
   const custKeys = Object.keys(out);
@@ -2845,6 +2862,8 @@ function handleRackReturn(text) {
     const realR = matchRack(cmap, op.rackId);
     const cur = cmap[realR] || 0;
     if (op.mode === 'collect') {
+      const ch = codedOutstandingFor(realC, realR);
+      if (ch.length) { const w = '・' + realC + ' ' + realR + ' ⚠️此品項已有代號紀錄（' + ch.map(function (h) { return '[' + h.code + '] ×' + h.n; }).join('、') + '），請改用代號收回（例 ' + ch[0].code.toLowerCase() + '*數量收回）；無代號的請先打 #鐵架轉代號'; warns.push(w); lst.push(w); return; }
       const amt = (op.amount == null) ? cur : Math.min(op.amount, cur);
       if (amt > 0) { addRow('入庫', realR, amt, realC); lst.push('・' + realC + ' ' + realR + ' 收回 ' + amt + (op.amount == null ? '（全部）' : '') + '，剩 ' + (cur - amt)); cnt++; }
     } else if (op.mode === 'set') {
@@ -2857,12 +2876,12 @@ function handleRackReturn(text) {
       lst.push('・' + realC + '：' + realR + ' 改名為 ' + op.newRackId + ' ×' + nq); cnt++;
     }
   });
-  if (!rackRows.length && !taiziRows.length) return { count: 0, reply: '🔧 沒有可處理的鐵架（可能該客戶目前沒有未收回，或格式對不上）。' };
+  if (!rackRows.length && !taiziRows.length) return { count: warns.length, reply: warns.length ? ('⚠️ 有品項已改代號制，需改用代號收回：\n' + warns.join('\n')) : '🔧 沒有可處理的鐵架（可能該客戶目前沒有未收回，或格式對不上）。' };
   if (rackRows.length) { const rs = getSheet(SHEET_RACK); rs.getRange(rs.getLastRow() + 1, 1, rackRows.length, 6).setValues(rackRows); }
   if (taiziRows.length) { const ts = getSheet(SHEET_TAIZI); ts.getRange(ts.getLastRow() + 1, 1, taiziRows.length, 6).setValues(taiziRows); }
   const what = (rackRows.length && taiziRows.length) ? '鐵架／台子' : (taiziRows.length ? '台子' : '鐵架');
   const look = (taiziRows.length && !rackRows.length) ? '查台子' : '查鐵架';
-  return { count: cnt, reply: '🔧 已處理' + what + '（' + cnt + ' 項）：\n' + lst.join('\n') + '\n（打「' + look + '」看最新狀況）' };
+  return { count: cnt + warns.length, reply: '🔧 已處理' + what + '（' + cnt + ' 項）：\n' + lst.join('\n') + '\n（打「' + look + '」看最新狀況）' };
 }
 function handleRackBatch(text) {
   const lines = String(text).split('\n').map(function (l) { return l.trim(); }).filter(Boolean);
@@ -3023,6 +3042,8 @@ function rackSlipStrict(text) {
   }
   const rows = [], lst = [];
   items.forEach(function (it) {
+    const ch = codedOutstandingFor(customer, it.name);   // 名稱式收回不得誤吞代號紀錄
+    if (ch.length) { lst.push('・' + it.name + ' ⚠️此品項已有代號紀錄（' + ch.map(function (h) { return '[' + h.code + '] ×' + h.n; }).join('、') + '），請改用代號收回（例 ' + ch[0].code.toLowerCase() + '*數量收回）；無代號的請先打 #鐵架轉代號'); return; }
     const cur = out[it.name] || 0; const amt = Math.min(it.qty, cur);   // 收回不可超過未收回，避免扣成負數
     if (amt > 0) {
       const over = (it.qty > cur) ? '（⚠️要求收 ' + it.qty + ' 超過未收回 ' + cur + '，只收 ' + amt + '）' : '';
@@ -3769,6 +3790,10 @@ function rackNet() {
 /* ---- 鐵架代號收回：a*2收回（多筆 a*2 b*3收回；a收回＝該代號全收）---- */
 function handleRackCodeCollect(text) {
   let t = String(text).replace(/\n/g, ' ').trim();
+  // 允許客戶名前綴：剝掉開頭連續中文字元當 prefix（例「彰化芬園B*1收回」→ prefix=彰化芬園）
+  let prefix = '';
+  const pfx = t.match(/^([一-龥]+)(.*)$/);
+  if (pfx) { prefix = pfx[1].trim(); t = pfx[2].trim(); }
   if (!/收/.test(t) || !/^[a-zA-Z]/.test(t)) return { count: 0, reply: '' };
   const pairs = []; let hasQty = false; let valid = true;
   t = t.replace(/([a-zA-Z]+?)\s*[*＊×xX]\s*(\d+)/g, function (_, c, q) { pairs.push({ code: c.toUpperCase(), qty: parseInt(q, 10) }); hasQty = true; return ' '; });
@@ -3784,6 +3809,11 @@ function handleRackCodeCollect(text) {
   pairs.forEach(function (p) {
     const o = net.coded[p.code];
     if (!o || o.n <= 0) { lst.push('・[' + p.code + '] ⚠️查無未收回（打「查鐵架」看代號）'); return; }
+    // 客戶名前綴防呆：prefix 與代號客戶名雙向 indexOf 都不中 → 警示跳過不收
+    if (prefix && String(o.cust).indexOf(prefix) === -1 && prefix.indexOf(String(o.cust)) === -1) {
+      lst.push('・[' + p.code + '] ⚠️代號 ' + p.code + ' 屬於 ' + o.cust + '，與你打的「' + prefix + '」不符，未收回');
+      return;
+    }
     anyFound = true;
     let amt = (p.qty == null) ? o.n : p.qty; let over = '';
     if (amt > o.n) { over = '（⚠️要求收 ' + amt + ' 超過未收回 ' + o.n + '，只收 ' + o.n + '）'; amt = o.n; }
@@ -3794,6 +3824,26 @@ function handleRackCodeCollect(text) {
   if (!anyFound && !hasQty) return { count: 0, reply: '' };   // 純字母閒聊（如 ok 收）→ 靜默放行，不誤觸警示
   if (rows.length) sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 6).setValues(rows);
   return { count: cnt, reply: '🔧 收鐵架（代號）：\n' + lst.join('\n') };
+}
+// 該客戶+品名是否存在「有代號、淨額>0」的未收回 → 名稱式收回應改用代號（雙向 indexOf 容錯）
+function rackMatchLoose(a, b) { a = String(a); b = String(b); return a === b || (!!a && !!b && (a.indexOf(b) !== -1 || b.indexOf(a) !== -1)); }
+function codedOutstandingFor(cust, rackId) {
+  const net = rackNet(); const hits = [];
+  net.codedOrder.forEach(function (c) { const o = net.coded[c]; if (o.n > 0 && rackMatchLoose(o.cust, cust) && rackMatchLoose(o.rackId, rackId)) hits.push({ code: c, n: o.n }); });
+  return hits;
+}
+// 台子庫存唯讀診斷：列出「出庫」異常大量列（疑似 119台*700 計價單被誤判台子出庫）。只列不改。
+function scanTaiziAnomalies(threshold) {
+  const th = threshold || 30;
+  const data = getSheet(SHEET_TAIZI).getDataRange().getValues();
+  const hits = [];
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][2]) !== '出庫') continue;
+    const q = Number(data[i][4]) || 0;
+    if (q >= th) hits.push('・' + (data[i][0] || '') + '｜' + (data[i][5] || '(未填客戶)') + '｜' + (data[i][3] || '台子') + ' 出庫 ' + q);
+  }
+  if (!hits.length) return '✅ 台子庫存沒有發現可疑的大量出庫（門檻 ' + th + '，即無疑似計價單誤記）。';
+  return '⚠️ 台子庫存可疑大量出庫（門檻 ' + th + '，疑似計價單被誤判台子出庫）——請人工核對，系統不會自動更改：\n' + hits.join('\n') + '\n共 ' + hits.length + ' 筆。';
 }
 /* ---- 一次性轉換：現有未收回的「舊名稱制」鐵架 → 配發代號（#鐵架轉代號 觸發，限老闆）---- */
 function migrateRackCodes() {

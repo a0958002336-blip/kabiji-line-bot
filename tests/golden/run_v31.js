@@ -141,8 +141,9 @@ function outTotal(env) { const m = send(env, '查鐵架').reply.match(/在外面
   const env = mkEnv();
   send(env, '陳記 勝山鐵架*2');   // 代號 A × 2
   check('③12 混用前總數=2', outTotal(env) === 2, String(outTotal(env)));
-  send(env, '陳記\n收\n勝山鐵架*1');   // 舊名稱方式收回 1
-  check('③12b 舊名稱收回後總數=1（rackNet 抵扣）', outTotal(env) === 1, String(outTotal(env)));
+  // v3.2 起：名稱式收回遇「已有代號紀錄」→ 擋下改用代號、不動帳（見 DECISIONS D-V32；rackNet 相容抵扣改由 run_v32 ③4 直接驗）
+  const r = send(env, '陳記\n收\n勝山鐵架*1');
+  check('③12b 名稱式收回遇代號 → 擋下、總數不變(2)', outTotal(env) === 2 && /已有代號紀錄/.test(r.reply), 'total=' + outTotal(env) + ' reply=' + r.reply);
 })();
 // 英文閒聊不誤觸
 (function () {

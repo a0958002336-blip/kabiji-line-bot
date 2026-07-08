@@ -89,6 +89,11 @@ const EXPORT_NAMES = [
   'handleRackCodeCollect',
   'migrateRackCodes',
   'rackOutstanding',
+  // ---- v3.2：計價單日期戳 / 台子誤記掃描 / 代號收回防護 ----
+  'dateStampOn',
+  'summarizeAmount',
+  'scanTaiziAnomalies',
+  'codedOutstandingFor',
 ];
 
 /* ------------------------------------------------------------------ */

@@ -27,6 +27,7 @@ const SUITES = [
   'run_quiet.js',         // 安靜模式：分群獨立 + 全域 + unknown 提示尊重安靜
   'run_backup.js',        // 每日試算表自動備份 dailyBackup（命名/保留14份/觸發器）
   'run_v31.js',           // v3.1：收款人指定＋#已收/#取消收款免空格＋鐵架代號制
+  'run_v32.js',           // v3.2：計價單日期戳＋代號前綴收回＋名稱式收回防護
 ];
 
 let totalPass = 0, totalCount = 0, hardFail = 0;
