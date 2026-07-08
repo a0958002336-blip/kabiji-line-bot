@@ -48,6 +48,7 @@
 - **D-BACKUP.3 觸發器 23:30、冪等**：`setupBackupTrigger()` 建每日觸發器（`atHour(23).nearMinute(30)`，避開整點尖峰）；已存在同 handler 則不重複建立。需部署後在 GAS 手動執行一次並授權 Drive。
 - **D-BACKUP.4 失敗通知老闆**：`dailyBackup()` try/catch，成功/清理份數 `Logger.log`；失敗 `notifyOwner('⚠️ 今日試算表備份失敗…')` 並回 `{ok:false}`。
 - **D-BACKUP.5 測試策略**：純邏輯（命名、保留刪除判斷）＋以 harness 新增的 DriveApp/ScriptApp mock 做端到端（自動建資料夾/複製/清理超量/不碰非備份檔/失敗通知/觸發器冪等）＝ `tests/golden/run_backup.js`（23 案）。**真實 Drive API 的實際複製/刪除/權限**依 spec 由部署後在 GAS 手動執行 `dailyBackup`／`setupBackupTrigger` 驗證。harness 注入 `DriveApp`/`ScriptApp` 兩個 mock，對既有測試零影響（多注入參數、既有碼未用）。全量 258/258 綠。
+- **D-BACKUP.6 改零新增權限版（2026/07/08，使用者回報 Drive 授權不彈出）**：使用者環境下 `DriveApp.*` 權限彈窗始終不出現（重執行/宣告 scopes/撤銷重授權皆失敗），導致 DriveApp 版備份無法啟用。→ 改用 `SpreadsheetApp.openById(SHEET_ID).copy(檔名)`，**僅需既有試算表權限、零新授權**；複本落「我的雲端硬碟」根目錄。自動刪舊檔需 DriveApp（會要新授權）故**移除自動清理**（刪 `backupsToDelete`/`getBackupFolder_`/`BACKUP_FOLDER_NAME`），改新增純函式 `shouldRemindCleanup` 做**每週一次 notifyOwner 提醒老闆手動整理**（獨立 try，絕不因提醒失敗而讓備份被判失敗）。觸發器/失敗通知不變。測試改寫 `run_backup.js`（25 案：命名、每週提醒判斷、copy 端到端、**斷言完全不碰 DriveApp**、失敗通知、觸發器冪等）；harness spreadsheet mock 加 `copy()`。全量 260/260 綠。手冊第五節/備份層清單同步為「My Drive 根目錄＋每週手動整理」。
 
 ## 開發紀律：#版本 build 識別（DISCIPLINE-VERSION）
 - **每次交付部署前，最後一個 commit 必須同步更新 `#版本`**：更新 `BOT_VERSION`、`BOT_BUILD`（最後 commit 短 hash）、`BOT_DATE`（見 `versionMessage()`）。

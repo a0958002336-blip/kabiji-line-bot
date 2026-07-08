@@ -81,7 +81,7 @@ const EXPORT_NAMES = [
   'setupBackupTrigger',
   'backupFileName',
   'isBackupFileName',
-  'backupsToDelete',
+  'shouldRemindCleanup',
 ];
 
 /* ------------------------------------------------------------------ */
@@ -178,10 +178,13 @@ function createEnv() {
     getDocumentProperties() { return scriptProps; },
   };
 
+  const ssState = { copies: [], failCopy: false };
   const spreadsheet = chainable({
     getSheetByName(n) { return sheets[n] || null; },
     insertSheet(n) { const s = makeSheet(n); sheets[n] = s; return s; },
     getId() { return 'mock-sheet-id'; },
+    getName() { return '卡比集總管'; },
+    copy(name) { if (ssState.failCopy) throw new Error('mock 試算表 copy 失敗'); ssState.copies.push(name); return chainable({ getId() { return 'copy-' + ssState.copies.length; }, getName() { return name; } }); },
   });
 
   const SpreadsheetApp = {
@@ -332,7 +335,7 @@ function createEnv() {
     DriveApp, ScriptApp
   );
 
-  return { fns, props, sheets, urlFetchCalls, loggerCalls, consoleErrors, scriptProps, driveState, triggers };
+  return { fns, props, sheets, urlFetchCalls, loggerCalls, consoleErrors, scriptProps, driveState, triggers, ssState };
 }
 
 module.exports = { createEnv, GS_PATH, EXPORT_NAMES };

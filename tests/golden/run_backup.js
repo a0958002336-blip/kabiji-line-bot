@@ -1,97 +1,80 @@
 'use strict';
-/* 每日試算表備份 dailyBackup 回歸測試
+/* 每日試算表備份 dailyBackup 回歸測試（零新增權限版）
  * ---------------------------------------------------------------------------
- * 驗證「可測邏輯」（不連真 Drive；DriveApp/ScriptApp 以 harness mock 注入）：
- *   - 命名規則 backupFileName / isBackupFileName（safety：只認自己的備份檔名）
- *   - 保留 14 份的刪除判斷 backupsToDelete（只刪備份檔、只刪超量的最舊者）
- *   - dailyBackup 端到端：自動建資料夾、複製、清理超量、絕不碰非備份檔、失敗通知老闆
- *   - setupBackupTrigger：建立每日觸發器、且重複執行不重覆建立
+ * 驗證：
+ *   - 命名規則 backupFileName / isBackupFileName
+ *   - 每週清理提醒判斷 shouldRemindCleanup（純函式）
+ *   - dailyBackup 端到端（用 SpreadsheetApp.copy mock）：複製一份、檔名正確、**完全不碰 DriveApp**、
+ *     每週提醒老闆一次、同日不重複提醒、失敗通知老闆、提醒失敗不影響備份
+ *   - setupBackupTrigger：建立每日觸發器、重複執行不重覆建立
  * 跑法：node tests/golden/run_backup.js（任一 FAIL → exit 1）
- * 註：真實 Drive API（實際複製/刪除檔案、權限）需部署後在 GAS 手動執行驗證。
+ * 註：真實「試算表複製」需部署後在 GAS 手動執行 dailyBackup 驗證（僅需既有試算表權限，無新授權）。
  */
 const { createEnv } = require('./harness');
-const FOLDER = '卡比集機器人備份';
+const OWNER = 'U_OWNER';
 let fails = 0; const out = [];
 function check(name, cond, detail) { if (cond) out.push('PASS ' + name); else { fails++; out.push('FAIL ' + name + '  ::  ' + (detail || '')); } }
+function pushes(env, re) { return env.urlFetchCalls.filter(function (c) { return /\/message\/push/.test(c.url) && (!re || re.test(c.opts.payload)); }).length; }
 
 /* ---------- A. 命名規則 ---------- */
 (function () {
   const env = createEnv();
   const bfn = env.fns.backupFileName, isb = env.fns.isBackupFileName;
-  const name = bfn(new Date(2026, 6, 7));   // 2026-07-07
-  check('A1 backupFileName 前綴＋日期', name === '卡比集總管_backup_2026-07-07', name);
+  check('A1 backupFileName 前綴＋日期', bfn(new Date(2026, 6, 7)) === '卡比集總管_backup_2026-07-07', bfn(new Date(2026, 6, 7)));
   check('A2 isBackupFileName 認得自己的檔', isb('卡比集總管_backup_2026-07-07') === true, '');
-  check('A3 isBackupFileName 拒絕日期不完整', isb('卡比集總管_backup_2026-7-7') === false, '');
-  check('A4 isBackupFileName 拒絕別的檔（safety）', isb('卡比集資料備份_20260706') === false && isb('營運試算表') === false && isb('') === false, '');
+  check('A3 isBackupFileName 拒絕格式不符', isb('卡比集總管_backup_2026-7-7') === false && isb('營運試算表') === false && isb('') === false, '');
 })();
 
-/* ---------- B. 保留 14 份的刪除判斷（純函式）---------- */
+/* ---------- B. 每週清理提醒判斷（純函式）---------- */
 (function () {
-  const env = createEnv();
-  const toDel = env.fns.backupsToDelete;
-  // 16 份備份（created 1..16，越大越新）＋ 2 個非備份檔
-  const files = [];
-  for (let i = 1; i <= 16; i++) files.push({ name: '卡比集總管_backup_2026-06-' + String(i).padStart(2, '0'), created: i });
-  files.push({ name: '重要文件_勿刪', created: 999 });
-  files.push({ name: '卡比集資料備份_20260601', created: 5 });   // 命名不符本規則 → 不算數
-  const del = toDel(files, 14);
-  check('B1 16 份備份刪最舊 2 份', del.length === 2, 'del=' + del.length);
-  check('B2 刪的是最舊(created 1、2)', del.every(function (d) { return d.created === 1 || d.created === 2; }), JSON.stringify(del.map(function (d) { return d.created; })));
-  check('B3 絕不刪非備份檔', del.every(function (d) { return /^卡比集總管_backup_/.test(d.name); }), JSON.stringify(del.map(function (d) { return d.name; })));
-
-  const few = []; for (let i = 1; i <= 14; i++) few.push({ name: '卡比集總管_backup_2026-06-' + String(i).padStart(2, '0'), created: i });
-  check('B4 剛好 14 份不刪', toDel(few, 14).length === 0, '');
-  check('B5 少於 14 份不刪', toDel(few.slice(0, 5), 14).length === 0, '');
+  const s = createEnv().fns.shouldRemindCleanup;
+  check('B1 從未提醒過 → 要提醒', s('', '2026-07-07') === true, '');
+  check('B2 同一天 → 不提醒', s('2026-07-07', '2026-07-07') === false, '');
+  check('B3 距 7 天 → 要提醒', s('2026-06-30', '2026-07-07') === true, '');
+  check('B4 距 6 天 → 不提醒', s('2026-07-01', '2026-07-07') === false, '');
+  check('B5 日期無法解析 → 要提醒（保守）', s('壞資料', '2026-07-07') === true, '');
 })();
 
-/* ---------- C. dailyBackup 端到端（mock Drive）---------- */
+/* ---------- C. dailyBackup 端到端（SpreadsheetApp.copy mock）---------- */
 (function () {
-  // C-1 資料夾不存在 → 自動建立、複製 1 份
+  // C-1 基本成功：複製一份、檔名正確、不碰 DriveApp
   const env = createEnv();
   const r = env.fns.dailyBackup();
   check('C1 dailyBackup 回報成功', r && r.ok === true, JSON.stringify(r));
-  const folder = env.driveState.folders.filter(function (f) { return f.__name === FOLDER; })[0];
-  check('C2 自動建立備份資料夾', !!folder, 'folders=' + env.driveState.folders.map(function (f) { return f.__name; }));
-  check('C3 資料夾內有 1 份備份', folder && folder.__files.filter(function (x) { return !x.__trashed; }).length === 1, '');
-  check('C4 備份檔名符合規則', folder && /^卡比集總管_backup_\d{4}-\d{2}-\d{2}$/.test(folder.__files[0].__name), folder && folder.__files[0].__name);
-  check('C5 Logger 有記錄', env.loggerCalls.some(function (m) { return /dailyBackup/.test(m); }), '');
+  check('C2 複製整份試算表 1 份', env.ssState.copies.length === 1, JSON.stringify(env.ssState.copies));
+  check('C3 複本檔名符合規則', /^卡比集總管_backup_\d{4}-\d{2}-\d{2}$/.test(env.ssState.copies[0]), env.ssState.copies[0]);
+  check('C4 完全不使用 DriveApp（零新增權限）', env.driveState.folders.length === 0, 'folders=' + env.driveState.folders.length);
+  check('C5 Logger 有成功記錄', env.loggerCalls.some(function (m) { return /dailyBackup 完成/.test(m); }), '');
 })();
 
 (function () {
-  // C-6 已有 14 份 → 再備份成 15 → 清掉最舊 1 份、保留 14；非備份檔不動
+  // C-6/7 每週提醒：首次提醒老闆，同日再跑不重複
   const env = createEnv();
-  env.fns.dailyBackup();                                   // 先建資料夾
-  const folder = env.driveState.folders.filter(function (f) { return f.__name === FOLDER; })[0];
-  // 手動塞到共 14 份（已有 1，補 13）＋ 1 個非備份檔
-  function stubFile(nm, created) {
-    const o = { __name: nm, __created: created, __trashed: false };
-    o.getName = function () { return o.__name; };
-    o.getDateCreated = function () { return { getTime: function () { return o.__created; } }; };
-    o.setTrashed = function (t) { o.__trashed = !!t; return o; };
-    return o;
-  }
-  folder.__files.push(stubFile('老闆的私人檔_勿刪', 0));
-  for (let i = 0; i < 13; i++) {
-    folder.__files.push(stubFile('卡比集總管_backup_2026-05-' + String(i + 1).padStart(2, '0'), 100 + i));
-  }
-  const before = folder.__files.filter(function (x) { return !x.__trashed; }).length;   // 15（14 備份 + 1 私人）
-  const r = env.fns.dailyBackup();                          // 新增 1 → 16 → 刪 1 → 15
-  const liveBackups = folder.__files.filter(function (x) { return !x.__trashed && /^卡比集總管_backup_/.test(x.__name); });
-  const privateAlive = folder.__files.some(function (x) { return x.__name === '老闆的私人檔_勿刪' && !x.__trashed; });
-  check('C6 保留恰 14 份備份', liveBackups.length === 14, 'live=' + liveBackups.length + ' before=' + before);
-  check('C7 私人檔未被刪（safety）', privateAlive, '');
-  check('C8 回報有清理', r && r.removed >= 1, JSON.stringify(r));
+  env.scriptProps.setProperty('OWNER_USER_ID', OWNER);
+  const r1 = env.fns.dailyBackup();
+  check('C6 首次備份 → 提醒老闆整理', r1.reminded === true && pushes(env, /每週備份提醒/) === 1, 'reminded=' + r1.reminded + ' push=' + pushes(env, /每週備份提醒/));
+  check('C6b 已記錄提醒日期', !!env.scriptProps.getProperty('BACKUP_CLEAN_REMINDER'), String(env.scriptProps.getProperty('BACKUP_CLEAN_REMINDER')));
+  const r2 = env.fns.dailyBackup();
+  check('C7 同日再備份 → 不重複提醒', r2.reminded === false && pushes(env, /每週備份提醒/) === 1, 'reminded=' + r2.reminded + ' push=' + pushes(env, /每週備份提醒/));
+  check('C7b 仍照常備份（第二份）', env.ssState.copies.length === 2 && r2.ok === true, JSON.stringify(env.ssState.copies));
 })();
 
 (function () {
-  // C-9 失敗 → notifyOwner 通知老闆、回報 ok:false
+  // C-8 失敗 → notifyOwner「備份失敗」、ok:false、未產生複本
   const env = createEnv();
-  env.scriptProps.setProperty('OWNER_USER_ID', 'U_OWNER');
-  env.driveState.failCopy = true;
+  env.scriptProps.setProperty('OWNER_USER_ID', OWNER);
+  env.ssState.failCopy = true;
   const r = env.fns.dailyBackup();
-  check('C9 失敗回報 ok:false', r && r.ok === false, JSON.stringify(r));
-  const pushed = env.urlFetchCalls.some(function (c) { return /\/message\/push/.test(c.url) && /備份失敗/.test(c.opts.payload); });
-  check('C10 失敗時 notifyOwner 通知老闆', pushed, 'urlFetchCalls=' + env.urlFetchCalls.length);
+  check('C8 失敗回報 ok:false', r && r.ok === false, JSON.stringify(r));
+  check('C9 失敗時通知老闆（備份失敗）', pushes(env, /備份失敗/) === 1, 'push=' + pushes(env, /備份失敗/));
+  check('C10 失敗時無複本產生', env.ssState.copies.length === 0, JSON.stringify(env.ssState.copies));
+})();
+
+(function () {
+  // C-11 無老闆（notifyOwner 靜默）→ 備份仍成功（提醒絕不影響備份）
+  const env = createEnv();
+  const r = env.fns.dailyBackup();
+  check('C11 無老闆時備份仍成功', r && r.ok === true && env.ssState.copies.length === 1, JSON.stringify(r));
 })();
 
 /* ---------- D. setupBackupTrigger ---------- */
@@ -106,7 +89,7 @@ function check(name, cond, detail) { if (cond) out.push('PASS ' + name); else { 
 })();
 
 /* ---------- 報告 ---------- */
-console.log('\n========== 每日試算表備份 dailyBackup 回歸測試 ==========\n');
+console.log('\n========== 每日試算表備份 dailyBackup 回歸測試（零新增權限版）==========\n');
 console.log(out.join('\n'));
 console.log('\n--------------------------------------------------');
 console.log(fails === 0 ? ' ✓ 全部 PASS（' + out.length + ' 項）' : ' ✗ 有 ' + fails + ' 項 FAIL');

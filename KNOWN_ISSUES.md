@@ -31,7 +31,7 @@
 
 ### Task 10 資料正確性與維運 — 大部分延後
 - 已完成：`replyToLine` 非 200 記錄狀態碼、safeReply 分則/截斷。
-- ✅ 已完成（2026/07/07，決策 D-BACKUP）：`dailyBackup()`+`setupBackupTrigger()`（DriveApp 每日複製試算表、保留 14 份、失敗通知老闆）＋文件 `docs/備份與還原手冊.md`、`docs/verify_sync.md`。純邏輯＋mock 端到端 23 測試；真實 Drive 操作待部署後手動執行 `setupBackupTrigger`/`dailyBackup` 驗證。
+- ✅ 已完成（2026/07/07，決策 D-BACKUP；2026/07/08 改零新增權限版 D-BACKUP.6）：`dailyBackup()`+`setupBackupTrigger()` 用 `SpreadsheetApp.copy` 每日複製整份試算表到雲端硬碟（僅需既有試算表權限、零新授權）、不自動刪改每週提醒老闆手動整理、失敗通知老闆＋文件 `docs/備份與還原手冊.md`、`docs/verify_sync.md`。純邏輯＋mock 端到端 25 測試；真實複製待部署後手動執行 `setupBackupTrigger`/`dailyBackup` 驗證。
 - 延後：NAME_ 快取改 CacheService、`summarizeAmount` 全時段掃描、`parseYMD` 跨年、`stockLatest` key 改 vendor|product、`logGroupMessage` 移到權限後。
 - 原因：DriveApp/觸發器/CacheService 遷移屬**基礎設施變更且無法在 node mock 驗證**（需真實 GAS 環境）；`stockLatest` key 變更有**既有資料相容風險**。依 fail-safe 原則，未經真實環境驗證不強改。建議在 GAS 編輯器內另案逐項驗證。
 
