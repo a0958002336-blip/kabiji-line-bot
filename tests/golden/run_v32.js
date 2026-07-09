@@ -50,6 +50,29 @@ const PRICE = '台北素茵\n高山初秋 特(修清) 10K 119台*700=83,300';
   check('①10 非老闆未開啟成功', env.fns.dateStampOn(G) === false, String(env.fns.dateStampOn(G)));
 })();
 
+/* ==================== ①' 唯讀(unknown/market)群組也能觸發日期戳（v3.2.2 修） ==================== */
+function sendTo(env, text, group, uid) {
+  const before = env.urlFetchCalls.length;
+  env.fns.handleEvent({ type: 'message', replyToken: 'RT', message: { type: 'text', text: text, id: 'M' + (++msgSeq) }, source: { groupId: group, userId: uid || OWNER } });
+  return env.urlFetchCalls.slice(before).filter(function (c) { return /\/message\/reply/.test(c.url); })
+    .map(function (c) { try { return JSON.parse(c.opts.payload).messages.map(function (m) { return m.text; }).join('\n'); } catch (e) { return ''; } }).join(' || ');
+}
+const RO = 'G_MARKET';   // 不在 ADMIN_GROUP_IDS → 唯讀(unknown)群組
+const PRICE2 = '中原開發食品\n一毛路 特 30件*300=9,000';
+(function () {
+  const env = mkEnv();   // ADMIN_GROUP_IDS=G_ADMIN，RO 為唯讀
+  const on = sendTo(env, '#開啟日期戳', RO);   // 老闆在唯讀群開啟（ownerGate 過）
+  check("①'0 唯讀群 #開啟日期戳 成功", /本群組已開啟計價單日期戳/.test(on), on);
+  const r = sendTo(env, PRICE2, RO);
+  check("①'1 唯讀群開啟後計價單 → 回 📅 日期（bug 修正）", /^📅\s*\d{4}\/\d{1,2}\/\d{1,2}/.test(r), JSON.stringify(r));
+  check("①'2 唯讀群計價單 → 台子/寄運零寫入", dataRows(env, TAIZI).length === 0 && dataRows(env, SHIP).length === 0, '台子=' + dataRows(env, TAIZI).length + ' 寄運=' + dataRows(env, SHIP).length);
+})();
+(function () {
+  const env = mkEnv();   // 唯讀群未開啟
+  const r = sendTo(env, PRICE2, RO);
+  check("①'3 唯讀群未開啟 → 計價單靜默", r === '', JSON.stringify(r));
+})();
+
 /* ==================== ② 代號收回允許客戶名前綴 ==================== */
 function setupAB(env) { send(env, '陳記 勝山鐵架*1'); send(env, '彰化芬園 旭陽鐵架*1'); }   // A=陳記, B=彰化芬園
 (function () {

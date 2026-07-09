@@ -21,9 +21,9 @@ const SHEET_TARE     = '空車重量';
 const SHEET_DUTY     = '外勤補貼';
 const SHEET_RECEIVABLE = '待收款';   // Task4 收款/未收款（含軟刪除稽核）
 // 版本識別：交付部署前務必更新 BOT_VERSION / BOT_BUILD(最後 commit 短hash) / BOT_DATE（見 DECISIONS 開發紀律）
-var BOT_VERSION = 'v3.2.1';
+var BOT_VERSION = 'v3.2.2';
 var BOT_BUILD = '00f4755';
-var BOT_DATE = '2026/07/09';
+var BOT_DATE = '2026/07/10';
 function versionMessage() {
   return '📦 卡比集機器人 ' + BOT_VERSION + ' (' + BOT_BUILD + ') ' + BOT_DATE + '\n本輪重點修復：\n' +
     '【意圖判斷層】收台≠收款、聊天/填充詞不建寄運、引用(Line Quote)訊息唯讀\n' +
@@ -40,6 +40,7 @@ function versionMessage() {
     '【v3.2 計價單日期戳】老闆 #開啟日期戳／#關閉日期戳／#日期戳狀態(分群)；開啟群傳「數量*單價=金額」計價單→回當日日期，且計價單一律不進寄運/台子(修「119台*700」誤判台子)\n' +
     '【v3.2 鐵架】代號收回可帶客戶名前綴(彰化芬園B*1收回，客戶不符會擋)；名稱式收回遇已有代號紀錄→擋下請改代號，避免整批被誤收\n' +
     '【v3.2.1 外勤】登記即時回覆精簡：只回登記結果＋「查累計」提示；查某員工外勤才顯示 當月累計／歷史總累計(月份寫明)\n' +
+    '【v3.2.2 修】計價單日期戳移到權限閘門之前：唯讀(客戶/市場)群組開啟後也能觸發(只回日期、零寫入)\n' +
     '你看到這行＝最新程式已生效（對照上方版本＋hash 即可確認是否新版）。';
 }
 const FONT_SIZE = 18;
@@ -171,6 +172,14 @@ function handleEvent(event) {
 
   // 一律記錄訊息供搜尋／統整（查詢類指令不記）
   if (!/^(#|中控總覽|中控總攬|今日總覽|今日總攬|總覽|總攬|中控|出外勤|查\s*外勤|外勤補貼|全部外勤|所有外勤|外勤全部|外勤紀錄|外勤記錄|外勤明細|外勤清單|今日送貨|當日送貨|送貨內容|送貨訊息|今日廢話|當日廢話|廢話內容|閒聊內容|今日閒聊|查廢話|發言次數|留言次數|發言統計|留言統計|發言排行|留言排行|誰發言|誰留言|查發言|查留言|客戶資訊|客戶停車|停車地點|停車位置|停車一覽|查詢|查全部停車|查所有停車|查地點|地點代號|地點清單|地點一覽|地址清單|指令表|指令|總指令|指令大全|指令查詢|查指令|幫助|功能表|搜尋|收尋|搜|件數|總件數|統整金額|統計金額|金額統整|統整|統計|冰庫庫存|冰庫總覽|查冰庫|冰庫設定|鐵架庫存|鐵架總覽|查鐵架|鐵架剩餘|查台子|台子總覽|台子剩餘|未收回台子|台子庫存|查改價|改價紀錄|改價查詢|查損耗|損耗紀錄|損耗查詢|查遲到|查請假|查上班|查下班|查員工出勤|查出勤|出勤查詢|出勤紀錄|出勤統計|查出勤統計|綜合評比|獎金評比|員工評比|評比|查\S*評比|今日鐵架|今天鐵架|鐵架記錄|今日冰庫|今天冰庫|冰庫記錄|拉出當日群組訊息|拉出群組訊息|當日群組訊息|今日群組訊息|當日訊息|今日訊息|拉訊息|拉出訊息|今日對話|當日對話)/.test(text)) logGroupMessage(text, source.userId, source.groupId || source.roomId);
+
+  /* ---- 計價單日期戳（分群開關）＋含「=金額」計價單一律不進寄運/台子 ----
+   *   置於權限閘門之前：唯讀(market/unknown)群組也能觸發（只回一則日期、零寫入＝本質等同唯讀查詢）。
+   *   訊息已於上一行 logGroupMessage 記錄，統整金額掃 =金額 不受影響。開關指令仍限老闆。 */
+  if (!isQuote && /[\d,]+\s*[台件包箱Kk]?\s*[*＊×xX]\s*[\d,]+\s*=\s*[\d,]+/.test(text) && !/^#/.test(text) && !isNoiseBlock(text) && !isShippingPullOutput(text)) {
+    if (dateStampOn(chatId)) replyToLine(replyToken, '📅 ' + Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy/M/d'));
+    return;   // 含 =金額 計價單：一律不進寄運/台子（避免「119台*700」把台判成台子誤出庫）；唯讀群也在此攔下
+  }
 
   // ★★★ 群組權限閘門（取代舊 isWorkGroup）：市場/未知群組唯讀、禁止任何寫入 ★★★
   const perm = getPerm(chatId);
@@ -660,12 +669,6 @@ function handleEvent(event) {
     }
   }
 
-  /* ---- 計價單日期戳（分群開關）＋ 含「=金額」計價單一律不進寄運/台子 ----
-   *   訊息已於前段 logGroupMessage 記錄（統整金額掃 =金額 不受影響）；此處只回日期戳並攔下寫入。 */
-  if (/[\d,]+\s*[台件包箱Kk]?\s*[*＊×xX]\s*[\d,]+\s*=\s*[\d,]+/.test(text) && !/^#/.test(text) && !isNoiseBlock(text) && !isShippingPullOutput(text)) {
-    if (dateStampOn(chatId)) replyToLine(replyToken, '📅 ' + Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy/M/d'));
-    return;   // 含 =金額 計價單：一律不得進寄運/台子寫入（避免「119台*700」把台判成台子誤出庫）
-  }
   /* ---- 寄運出貨單（含鐵架(鐵架*N)漏記修正）---- */
   if (/\d+\s*(?:件|台(?!子)|包|箱)/.test(text) && !/扣除|損耗|入庫|出庫|匯款|改\s*\d|[（(]\s*鐵架|收\s*$|【/.test(text)) {
     const ship = parseShipping(text);
