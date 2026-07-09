@@ -28,6 +28,7 @@ const SUITES = [
   'run_backup.js',        // 每日試算表自動備份 dailyBackup（命名/保留14份/觸發器）
   'run_v31.js',           // v3.1：收款人指定＋#已收/#取消收款免空格＋鐵架代號制
   'run_v32.js',           // v3.2：計價單日期戳＋代號前綴收回＋名稱式收回防護
+  'run_routes.js',        // 全路由回歸網（每路由一正一反＋查詢類零寫入）
 ];
 
 let totalPass = 0, totalCount = 0, hardFail = 0;
