@@ -32,6 +32,9 @@ function check(name, cond, detail) { if (cond) out.push('PASS ' + name); else { 
   const env2 = createEnv();
   const r2 = env2.fns.handleDuty('阿良出外勤 台北一市場');
   check('2d 有地點正常登記', r2.count === 1 && /台北一市場/.test(r2.reply), r2.reply);
+  // v3.2.x：即時回覆移除累計行、改附查累計提示
+  check('2e 即時回覆不含舊累計行', !/本月累計|總累計/.test(r2.reply), r2.reply);
+  check('2f 即時回覆含查累計提示', /查阿良外勤/.test(r2.reply), r2.reply);
 })();
 
 console.log('\n========== Task 7 回覆防護 + 未填地點 回歸測試 ==========\n');

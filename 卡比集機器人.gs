@@ -21,7 +21,7 @@ const SHEET_TARE     = '空車重量';
 const SHEET_DUTY     = '外勤補貼';
 const SHEET_RECEIVABLE = '待收款';   // Task4 收款/未收款（含軟刪除稽核）
 // 版本識別：交付部署前務必更新 BOT_VERSION / BOT_BUILD(最後 commit 短hash) / BOT_DATE（見 DECISIONS 開發紀律）
-var BOT_VERSION = 'v3.2';
+var BOT_VERSION = 'v3.2.1';
 var BOT_BUILD = '09b150a';
 var BOT_DATE = '2026/07/09';
 function versionMessage() {
@@ -39,6 +39,7 @@ function versionMessage() {
     '【v3.1 鐵架代號制】出鐵架自動配代號[A][B]…，收回打「a*2收回」(多筆 a*2 b*3收回；a收回=全收，不分大小寫)；舊資料 #鐵架轉代號(限老闆)；新舊混用自動對帳\n' +
     '【v3.2 計價單日期戳】老闆 #開啟日期戳／#關閉日期戳／#日期戳狀態(分群)；開啟群傳「數量*單價=金額」計價單→回當日日期，且計價單一律不進寄運/台子(修「119台*700」誤判台子)\n' +
     '【v3.2 鐵架】代號收回可帶客戶名前綴(彰化芬園B*1收回，客戶不符會擋)；名稱式收回遇已有代號紀錄→擋下請改代號，避免整批被誤收\n' +
+    '【v3.2.1 外勤】登記即時回覆精簡：只回登記結果＋「查累計」提示；查某員工外勤才顯示 當月累計／歷史總累計(月份寫明)\n' +
     '你看到這行＝最新程式已生效（對照上方版本＋hash 即可確認是否新版）。';
 }
 const FONT_SIZE = 18;
@@ -2037,8 +2038,7 @@ function handleDuty(text) {
   let subsidy = override; let basis = '手動指定';
   if (subsidy == null) { if (depTime < cfg.threshold) { subsidy = cfg.before; basis = cfg.threshold + ' 前出發'; } else { subsidy = cfg.after; basis = cfg.threshold + ' 後出發'; } }
   getSheet(SHEET_DUTY).appendRow([nowStr(), emp, location, depTime, subsidy, '']);
-  const ym = thisYM(); const monthTotal = dutyTotal(emp, ym); const allTotal = dutyTotal(emp, '');
-  return { count: 1, reply: '🚚 ' + emp + ' 出外勤【' + (location || '未填地點') + '】 出發 ' + depTime + '（' + basis + '）→ 補貼 ' + subsidy + ' 元\n本月累計 ' + monthTotal + ' 元・總累計 ' + allTotal + ' 元' };
+  return { count: 1, reply: '🚚 ' + emp + ' 出外勤【' + (location || '未填地點') + '】 出發 ' + depTime + '（' + basis + '）→ 補貼 ' + subsidy + ' 元\n（查累計：打「查' + emp + '外勤」）' };
 }
 function dutyQuery(emp, monthArg) {
   const ym = resolveYM(monthArg) || thisYM();
@@ -2050,7 +2050,7 @@ function dutyQuery(emp, monthArg) {
     if (ymOf(data[i][0]) === ym) { monthTotal += amt; rows.push('・' + ymdStr(data[i][0]) + ' ' + (data[i][2] || '') + ' 出發' + hmOf(data[i][3]) + ' → ' + amt + ' 元'); }
   }
   if (!anyEmp) return '查無「' + emp + '」的外勤補貼紀錄。';
-  return '🚚 ' + emp + ' 外勤補貼（' + ym + '）：\n' + (rows.length ? rows.join('\n') : '（本月尚無）') + '\n――――――\n💪 本月累計：' + monthTotal + ' 元\n📊 總累計：' + allTotal + ' 元';
+  return '🚚 ' + emp + ' 外勤補貼（' + ym + '）：\n' + (rows.length ? rows.join('\n') : '（本月尚無）') + '\n――――――\n💪 ' + ym + ' 累計：' + monthTotal + ' 元\n📊 歷史總累計：' + allTotal + ' 元';
 }
 function dutyAll(monthArg) {
   const ym = resolveYM(monthArg) || thisYM();

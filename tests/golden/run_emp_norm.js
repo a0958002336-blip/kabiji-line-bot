@@ -83,7 +83,7 @@ function withAliases(env) {
   check('3c 外勤合計不得有單獨「・良：」', all.indexOf('・良：') === -1, all);
   check('3d 外勤合計宏欸(去時間)=800', /宏欸：800/.test(all), all);
   const q = env.fns.dutyQuery('阿良', YM);
-  check('3e 查阿良外勤含別名 本月累計 800', /本月累計：800/.test(q), q);
+  check('3e 查阿良外勤含別名 當月累計 800', /💪 2026\/06 累計：800/.test(q) && /📊 歷史總累計：800/.test(q), q);
 })();
 
 /* ---------- 4. 薪資/綜合評比：合併同一人 ---------- */
