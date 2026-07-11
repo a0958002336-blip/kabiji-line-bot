@@ -20,10 +20,11 @@ const SHEET_RETURN   = '退貨紀錄';
 const SHEET_TARE     = '空車重量';
 const SHEET_DUTY     = '外勤補貼';
 const SHEET_RECEIVABLE = '待收款';   // Task4 收款/未收款（含軟刪除稽核）
+const SHEET_FAIL     = '輸入失敗紀錄';   // v3.3 輸入失敗追蹤
 // 版本識別：交付部署前務必更新 BOT_VERSION / BOT_BUILD(最後 commit 短hash) / BOT_DATE（見 DECISIONS 開發紀律）
-var BOT_VERSION = 'v3.2.3';
+var BOT_VERSION = 'v3.3';
 var BOT_BUILD = '334abeb';
-var BOT_DATE = '2026/07/11';
+var BOT_DATE = '2026/07/12';
 function versionMessage() {
   return '📦 卡比集機器人 ' + BOT_VERSION + ' (' + BOT_BUILD + ') ' + BOT_DATE + '\n本輪重點修復：\n' +
     '【意圖判斷層】收台≠收款、聊天/填充詞不建寄運、引用(Line Quote)訊息唯讀\n' +
@@ -42,6 +43,7 @@ function versionMessage() {
     '【v3.2.1 外勤】登記即時回覆精簡：只回登記結果＋「查累計」提示；查某員工外勤才顯示 當月累計／歷史總累計(月份寫明)\n' +
     '【v3.2.2 修】計價單日期戳移到權限閘門之前：唯讀(客戶/市場)群組開啟後也能觸發(只回日期、零寫入)\n' +
     '【v3.2.3 修】件數/搜尋查詢：參數含禮貌/聊天用語(麻煩|提供|一下|請|喔…)不再誤觸；查無結果時尊重安靜模式(有結果照回)\n' +
+    '【v3.3 輸入失敗追蹤】各格式錯誤警示點自動留檔到「輸入失敗紀錄」(安靜被靜默的也留)；老闆打「查輸入失敗／今日輸入失敗／查輸入失敗 7/1-7/10」看清單＋每人失敗次數排行\n' +
     '你看到這行＝最新程式已生效（對照上方版本＋hash 即可確認是否新版）。';
 }
 const FONT_SIZE = 18;
@@ -170,6 +172,8 @@ function handleEvent(event) {
   if (text === '#開啟日期戳') { if (!ownerGate(source, replyToken)) return; addDateStampGroup(chatId); replyToLine(replyToken, '📅 ✅ 本群組已開啟計價單日期戳'); return; }
   if (text === '#關閉日期戳') { if (!ownerGate(source, replyToken)) return; removeDateStampGroup(chatId); replyToLine(replyToken, '📅 本群組已關閉計價單日期戳'); return; }
   if (text === '#日期戳狀態') { replyToLine(replyToken, dateStampOn(chatId) ? '📅 本群組計價單日期戳：開啟中' : '📅 本群組計價單日期戳：關閉'); return; }
+  if (/^(今日|今天)輸入失敗\s*$/.test(text)) { if (!ownerOnly(source, replyToken, '查輸入失敗')) return; replyToLine(replyToken, queryInputFails('__TODAY__')); return; }
+  if (/^查輸入失敗/.test(text)) { if (!ownerOnly(source, replyToken, '查輸入失敗')) return; replyToLine(replyToken, queryInputFails(text.replace(/^查輸入失敗/, '').trim())); return; }
 
   // 一律記錄訊息供搜尋／統整（查詢類指令不記）
   if (!/^(#|中控總覽|中控總攬|今日總覽|今日總攬|總覽|總攬|中控|出外勤|查\s*外勤|外勤補貼|全部外勤|所有外勤|外勤全部|外勤紀錄|外勤記錄|外勤明細|外勤清單|今日送貨|當日送貨|送貨內容|送貨訊息|今日廢話|當日廢話|廢話內容|閒聊內容|今日閒聊|查廢話|發言次數|留言次數|發言統計|留言統計|發言排行|留言排行|誰發言|誰留言|查發言|查留言|客戶資訊|客戶停車|停車地點|停車位置|停車一覽|查詢|查全部停車|查所有停車|查地點|地點代號|地點清單|地點一覽|地址清單|指令表|指令|總指令|指令大全|指令查詢|查指令|幫助|功能表|搜尋|收尋|搜|件數|總件數|統整金額|統計金額|金額統整|統整|統計|冰庫庫存|冰庫總覽|查冰庫|冰庫設定|鐵架庫存|鐵架總覽|查鐵架|鐵架剩餘|查台子|台子總覽|台子剩餘|未收回台子|台子庫存|查改價|改價紀錄|改價查詢|查損耗|損耗紀錄|損耗查詢|查遲到|查請假|查上班|查下班|查員工出勤|查出勤|出勤查詢|出勤紀錄|出勤統計|查出勤統計|綜合評比|獎金評比|員工評比|評比|查\S*評比|今日鐵架|今天鐵架|鐵架記錄|今日冰庫|今天冰庫|冰庫記錄|拉出當日群組訊息|拉出群組訊息|當日群組訊息|今日群組訊息|當日訊息|今日訊息|拉訊息|拉出訊息|今日對話|當日對話)/.test(text)) logGroupMessage(text, source.userId, source.groupId || source.roomId);
@@ -206,7 +210,7 @@ function handleEvent(event) {
     const hasEdit = /修改\s*\d+|取消|清除/.test(text);
     if (hasEdit) { const c = handleFreezerCancel(text); if (c.count > 0) { replyToLine(replyToken, c.reply); return; } }
     if (hasShip) { const s = handleFreezerShip(text); if (s.count > 0) { replyToLine(replyToken, s.reply); return; } }
-    if (hasShip || hasEdit) { replyToLine(replyToken, '⚠️ 冰庫貼回操作格式不符。出貨：品項：餘額 出N；改量：品項 修改N；取消：品項 取消。'); return; }
+    if (hasShip || hasEdit) { logInputFail('冰庫貼回格式', source, chatId, text); replyToLine(replyToken, '⚠️ 冰庫貼回操作格式不符。出貨：品項：餘額 出N；改量：品項 修改N；取消：品項 取消。'); return; }
     if (!quiet(chatId)) replyToLine(replyToken, '⚠️ 此為冰庫查詢結果，不會寫入資料。');   // 純貼回 → 保留原防呆（非必要提示，尊重安靜）
     return;
   }
@@ -229,6 +233,7 @@ function handleEvent(event) {
     }
     if (out.length) { replyToLine(replyToken, out.join('\n\n')); return; }
     if (/取消|清除/.test(text) || MODRE.test(text)) {      // 有下編輯字但找不到 → 給正確打法
+      logInputFail('寄運貼回格式', source, chatId, text);
       replyToLine(replyToken, '⚠️ 找不到對應的寄運資料（品名／數量要跟畫面一致）。\n直接在單上編輯：\n・改件數 → 該行尾加「修改135」(例 進口228 170包 修改135)\n・改容器 → 該行尾加「改圓籃」或「改容器 圓籃」\n・刪單品 → 該行尾加「取消」(例 進口228 170 取消)\n・刪整個客戶 →「【客戶】取消」\n・刪今天全部 →「寄運資料 清除 確定」');
     }
     return;   // 沒下任何編輯字 → 靜默結束、不重記
@@ -531,7 +536,7 @@ function handleEvent(event) {
   /* ---- 鐵架輸入防呆（涵蓋【】/多行/單行）：名稱要含「鐵架」、零售商名稱一致，不合格直接擋下教學 ---- */
   {
     const rg = rackEntryGuard(text);
-    if (rg && rg.warn) { replyToLine(replyToken, rg.reply); return; }   // 警示一律回覆，不受安靜模式影響
+    if (rg && rg.warn) { logInputFail('鐵架格式', source, chatId, text); replyToLine(replyToken, rg.reply); return; }   // 警示一律回覆，不受安靜模式影響
   }
 
   if (/台子\s*[×xX*]\s*\d/.test(text) && (/收\s*\d/.test(text) || /取消/.test(text) || /修改\s*\d/.test(text))) {
@@ -661,7 +666,7 @@ function handleEvent(event) {
   {
     const rd = recvDetect(text);
     if (rd) {
-      if (rd.needAmount) { replyToLine(replyToken, '⚠️ 偵測到收款意圖但讀不到金額，請用格式：客戶 品項 要收款 6800（或 6800元）。'); return; }
+      if (rd.needAmount) { logInputFail('收款無金額', source, chatId, text); replyToLine(replyToken, '⚠️ 偵測到收款意圖但讀不到金額，請用格式：客戶 品項 要收款 6800（或 6800元）。'); return; }
       logIntent('收款建立', text);
       const cr = recvCreate(rd, (source.groupId || source.roomId || ''), (event.message && event.message.id) || '', getDisplayName(chatId, source.userId), text);
       if (cr.dup) { replyToLine(replyToken, '⚠️ 這筆收款已存在（24小時內同客戶同金額同品項或同訊息），未重複建立。'); return; }
@@ -681,7 +686,7 @@ function handleEvent(event) {
     const carrierSet = allCarrierCustomers();
     const shipRecs = ship.records.filter(function (r) { return isShippingRecord(r, carrierSet); });
     const hasTaizi = ship.records.some(function (r) { return r.pack === '台子' && Number(r.qty) > 0; });
-    if (shipRecs.length > 0 && !intentAllowsWrite(text)) { if (!quiet(chatId)) replyToLine(replyToken, '⚠️ 無法確認指令，請重新輸入正式寄運格式（客戶＋品項＋件數＋寄物流，例：漢光⏎南瓜 特30件 寄旭陽）。'); return; }
+    if (shipRecs.length > 0 && !intentAllowsWrite(text)) { logInputFail('寄運格式', source, chatId, text); if (!quiet(chatId)) replyToLine(replyToken, '⚠️ 無法確認指令，請重新輸入正式寄運格式（客戶＋品項＋件數＋寄物流，例：漢光⏎南瓜 特30件 寄旭陽）。'); return; }
     let taiziTotal = 0; const taiziSkip = [];
     if (shipRecs.length > 0 || hasTaizi) {
       const sh = getSheet(SHEET_SHIP); const tz = getSheet(SHEET_TAIZI);
@@ -711,7 +716,7 @@ function handleEvent(event) {
     if (rackReply) physical.push(rackReply);
     if (physical.length) { replyToLine(replyToken, physical.join('\n\n')); return; }
     // 有件數品項行但判不出客戶（指示句/物流商/黏行）→ fail-closed 教學；其餘（如純出貨非寄運）→ 靜默(往下走)
-    if (ship.unresolved > 0) { if (!quiet(chatId)) replyToLine(replyToken, '⚠️ 無法判斷指令，請使用指定格式（打「指令表」查看）。'); return; }
+    if (ship.unresolved > 0) { logInputFail('寄運無法判斷', source, chatId, text); if (!quiet(chatId)) replyToLine(replyToken, '⚠️ 無法判斷指令，請使用指定格式（打「指令表」查看）。'); return; }
   }
 
   if (/[(（]/.test(text)) {
@@ -744,7 +749,7 @@ function handleEvent(event) {
   /* ---- 鐵架固定格式驗證（非【】單）：格式/名稱不對直接跳警示，正確才寫入 ---- */
   {
     const rs = rackSlipStrict(text);
-    if (rs.handled) { replyToLine(replyToken, rs.reply); return; }
+    if (rs.handled) { if (rs.warn) logInputFail('鐵架格式', source, chatId, text); replyToLine(replyToken, rs.reply); return; }
   }
 
   if (/【.+?】/.test(text) && /[×xX*]\s*\d+/.test(text) && /收/.test(text)) {
@@ -2224,7 +2229,7 @@ function commandSheet() {
     '【出勤】', '・中控總覽（限老闆）', '・打卡：員工名＋上班／下班／遲到／請假', '・查員工出勤／查遲到／查請假／查上班／查下班', '・出勤統計／綜合評比（限老闆）', '・入職：員工名＋入職', '・借支：員工名＋借＋金額', '・外勤補貼：員工名＋出外勤＋地點', '',
     '【改價/損耗/匯款】', '・客戶 改價 內容', '・客戶 匯款 金額', '・對帳單貼上（扣除N件/改NNN元）', '・查改價　查損耗', '',
     '【群組權限（限老闆）】', '・#群組ID', '・#設為管理群組（這群可寫入）', '・#設為市場群組（這群唯讀）', '・#群組權限', '',
-    '【設定】', '・#版本　#設定客戶 名稱　#查客戶', '・#貨主名單／#新增貨主 X', '・#冰庫名單／#新增冰庫 X', '・#安靜／#取消安靜（僅本群組）', '・#全部安靜／#全部取消安靜（全部群組・限老闆）', '・#開啟日期戳／#關閉日期戳／#日期戳狀態（計價單回當日日期・限老闆）', '',
+    '【設定】', '・#版本　#設定客戶 名稱　#查客戶', '・#貨主名單／#新增貨主 X', '・#冰庫名單／#新增冰庫 X', '・#安靜／#取消安靜（僅本群組）', '・#全部安靜／#全部取消安靜（全部群組・限老闆）', '・#開啟日期戳／#關閉日期戳／#日期戳狀態（計價單回當日日期・限老闆）', '・查輸入失敗／今日輸入失敗／查輸入失敗 7/1-7/10（限老闆）', '',
     '【清除（限老闆，要加「確定」）】', '・出勤 清除 確定／冰庫 清除 確定／台子 清除 確定／寄運資料 清除 確定', '・改價紀錄 清除 確定／損耗紀錄 清除 確定／冰庫總量 清除 確定', '',
     '（打「指令表」隨時叫出這張）'
   ].join('\n');
@@ -2239,6 +2244,48 @@ function logGroupMessage(text, userId, groupId) {
     const last = sheet.getLastRow();
     if (last > 8000) sheet.deleteRows(2, Math.min(3000, last - 6000));
   }
+}
+/* ========================== 【v3.3 輸入失敗追蹤】 ==========================
+ * 在各「格式錯誤警示」回覆點呼叫 logInputFail 留檔（安靜模式被靜默的也照樣寫入）。
+ * 防灌表：同一人同一分鐘內重複同樣原文只記一筆；表超過 3000 筆自動清最舊。 */
+function logInputFail(type, source, chatId, text) {
+  try {
+    const who = getDisplayName(chatId, source && source.userId);
+    const raw = String(text || '');
+    const now = nowStr();   // 分鐘精度（yyyy/MM/dd HH:mm）
+    const sheet = getSheet(SHEET_FAIL);
+    const data = sheet.getDataRange().getValues();
+    for (let i = data.length - 1; i >= 1 && i >= data.length - 80; i--) {
+      if (String(data[i][0]) === now && String(data[i][2]) === who && String(data[i][3]) === raw) return;   // 同分鐘同人同原文 → 只記一筆
+    }
+    sheet.appendRow([now, type || '', who, raw, (source && (source.groupId || source.roomId)) || chatId || '']);
+    const last = sheet.getLastRow();
+    if (last > 3000) sheet.deleteRows(2, Math.min(500, last - 2500));   // 超過 3000 筆清最舊
+  } catch (e) { }
+}
+// 查詢輸入失敗（限老闆）。arg：''＝全部(最近50)；'__TODAY__'＝今日；'7/10' 或 '7/1-7/10'＝日期/區間。
+function queryInputFails(arg) {
+  const data = getSheet(SHEET_FAIL).getDataRange().getValues();
+  if (data.length <= 1) return '📋 目前沒有輸入失敗紀錄。';
+  const argS = String(arg || '').trim();
+  let lo = null, hi = null, label = '全部';
+  if (argS === '__TODAY__' || /今日|今天/.test(argS)) { lo = hi = parseYMD(Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy/MM/dd')); label = '今日'; }
+  else {
+    const dates = argS.match(/(?:\d{4}\/)?\d{1,2}\/\d{1,2}/g) || [];
+    if (dates.length) { lo = parseYMD(dates[0]); hi = parseYMD(dates[1] || dates[0]); if (lo > hi) { const x = lo; lo = hi; hi = x; } label = dates[0] + (dates[1] ? '~' + dates[1] : ''); }
+  }
+  const rows = []; const counts = {};
+  for (let i = 1; i < data.length; i++) {
+    if (lo !== null) { const d = ymdNum(data[i][0]); if (!d || d < lo || d > hi) continue; }
+    rows.push(data[i]);
+    const who = String(data[i][2] || '未知'); counts[who] = (counts[who] || 0) + 1;
+  }
+  if (!rows.length) return '📋 ' + label + ' 沒有輸入失敗紀錄。';
+  const capped = (lo === null && rows.length > 50);
+  const show = capped ? rows.slice(-50) : rows;
+  const lines = show.map(function (r) { return String(r[0]) + '｜' + (r[2] || '') + '｜' + (r[1] || '') + '｜' + String(r[3] || '').replace(/\n/g, ' ').slice(0, 30); });
+  const rank = Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a]; }).map(function (w) { return '・' + w + '：' + counts[w] + ' 次'; });
+  return '📋 輸入失敗紀錄（' + label + '，共 ' + rows.length + ' 筆' + (capped ? '，顯示最近 50' : '') + '）：\n' + lines.join('\n') + '\n――――――\n📊 失敗次數排行：\n' + rank.join('\n');
 }
 var NAME_FETCH_COUNT = 0;
 function msgTail(maxRows) {
@@ -3028,12 +3075,12 @@ function rackSlipStrict(text) {
   if (!sawItem || !customer) return { handled: false };
   if (items.every(function (it) { return /^台子$/.test(it.name); })) return { handled: false };   // 純台子交給台子處理
   const bad = items.filter(function (it) { return !/鐵/.test(it.name); });
-  if (bad.length || sawOther) return { handled: true, reply: rackFormatWarning(bad.map(function (b) { return b.raw; })) };
+  if (bad.length || sawOther) return { handled: true, warn: true, reply: rackFormatWarning(bad.map(function (b) { return b.raw; })) };
   // 零售商名稱防呆：打了一個「不完全相同、但很像既有客戶」的名稱 → 跳警示請確認
   const knownC = knownRetailers();
   if (knownC.indexOf(customer) === -1) {
     const sim = knownC.filter(function (c) { return c !== customer && (c.indexOf(customer) !== -1 || customer.indexOf(c) !== -1); });
-    if (sim.length) return { handled: true, reply: '⚠️ 零售商名稱可能不一致，已暫停記錄。\n你打的是「' + customer + '」，請問是不是指：\n・' + sim.join('\n・') + '\n\n請改用完整正確的名稱再送一次（統計名稱要固定才不會亂）。' };
+    if (sim.length) return { handled: true, warn: true, reply: '⚠️ 零售商名稱可能不一致，已暫停記錄。\n你打的是「' + customer + '」，請問是不是指：\n・' + sim.join('\n・') + '\n\n請改用完整正確的名稱再送一次（統計名稱要固定才不會亂）。' };
   }
   const sheet = getSheet(SHEET_RACK);
   if (!collect) {
@@ -3611,6 +3658,7 @@ function headerFor(name) {
   if (name === SHEET_TARE)    return ['車牌', '空車重量', '名稱', '更新時間'];
   if (name === SHEET_DUTY)    return ['時間', '員工', '地點', '出發時間', '補貼', '備註'];
   if (name === SHEET_RECEIVABLE) return ['建立時間', '日期', '客戶', '供應商', '品項', '金額', '備註', '狀態', '建立者', '收款人', '收款時間', '結案時間', '來源群組', '來源訊息ID', '原文', '刪除時間', '刪除者', '取消原因'];
+  if (name === SHEET_FAIL)    return ['時間', '類型', '輸入者', '原文', '群組ID'];
   return ['時間', '客戶', '類型', '金額', '內容', '回報人'];
 }
 function formatSheet(sheet, numCols) {

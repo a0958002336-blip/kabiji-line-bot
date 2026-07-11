@@ -30,6 +30,7 @@ const SUITES = [
   'run_v32.js',           // v3.2：計價單日期戳＋代號前綴收回＋名稱式收回防護
   'run_routes.js',        // 全路由回歸網（每路由一正一反＋查詢類零寫入）
   'run_v323.js',          // v3.2.3：聊天句誤觸件數/搜尋查詢＋查無尊重安靜
+  'run_v33.js',           // v3.3：輸入失敗追蹤（各警示點留檔＋查詢排行）
 ];
 
 let totalPass = 0, totalCount = 0, hardFail = 0;
