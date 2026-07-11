@@ -21,9 +21,9 @@ const SHEET_TARE     = '空車重量';
 const SHEET_DUTY     = '外勤補貼';
 const SHEET_RECEIVABLE = '待收款';   // Task4 收款/未收款（含軟刪除稽核）
 // 版本識別：交付部署前務必更新 BOT_VERSION / BOT_BUILD(最後 commit 短hash) / BOT_DATE（見 DECISIONS 開發紀律）
-var BOT_VERSION = 'v3.2.2';
+var BOT_VERSION = 'v3.2.3';
 var BOT_BUILD = 'd92b450';
-var BOT_DATE = '2026/07/10';
+var BOT_DATE = '2026/07/11';
 function versionMessage() {
   return '📦 卡比集機器人 ' + BOT_VERSION + ' (' + BOT_BUILD + ') ' + BOT_DATE + '\n本輪重點修復：\n' +
     '【意圖判斷層】收台≠收款、聊天/填充詞不建寄運、引用(Line Quote)訊息唯讀\n' +
@@ -41,6 +41,7 @@ function versionMessage() {
     '【v3.2 鐵架】代號收回可帶客戶名前綴(彰化芬園B*1收回，客戶不符會擋)；名稱式收回遇已有代號紀錄→擋下請改代號，避免整批被誤收\n' +
     '【v3.2.1 外勤】登記即時回覆精簡：只回登記結果＋「查累計」提示；查某員工外勤才顯示 當月累計／歷史總累計(月份寫明)\n' +
     '【v3.2.2 修】計價單日期戳移到權限閘門之前：唯讀(客戶/市場)群組開啟後也能觸發(只回日期、零寫入)\n' +
+    '【v3.2.3 修】件數/搜尋查詢：參數含禮貌/聊天用語(麻煩|提供|一下|請|喔…)不再誤觸；查無結果時尊重安靜模式(有結果照回)\n' +
     '你看到這行＝最新程式已生效（對照上方版本＋hash 即可確認是否新版）。';
 }
 const FONT_SIZE = 18;
@@ -291,7 +292,7 @@ function handleEvent(event) {
   }
 
   /* ---- 搜尋統整（嚴格：單一品名、無聊天語、去掉「查詢」別名）---- */
-  { let _sm = text.match(/^(搜尋|收尋|搜)\s*(\S{1,16})$/); if (_sm && !CHAT_RE.test(_sm[2]) && !/[，。！？、]/.test(_sm[2])) { replyToLine(replyToken, searchToday(_sm[2].trim())); return; } }
+  { let _sm = text.match(/^(搜尋|收尋|搜)\s*(\S{1,16})$/); if (_sm && !CHAT_RE.test(_sm[2]) && !QUERY_CHAT_RE.test(_sm[2]) && !/[，。！？、]/.test(_sm[2])) { const _r = searchToday(_sm[2].trim()); if (!(isNoQueryResult(_r) && quiet(chatId))) replyToLine(replyToken, _r); return; } }
 
   {
     const names = [];
@@ -464,7 +465,7 @@ function handleEvent(event) {
   if (lqm) { replyToLine(replyToken, lossQuery(lqm[2].trim())); return; }
 
   /* ---- 件數（嚴格：單一品名、無聊天語）---- */
-  { let _qm = text.match(/^(總件數|件數)\s*(\S{1,12})$/); if (_qm && !CHAT_RE.test(_qm[2]) && !/[，。！？、]/.test(_qm[2])) { replyToLine(replyToken, countPieces(_qm[2].trim())); return; } }
+  { let _qm = text.match(/^(總件數|件數)\s*(\S{1,12})$/); if (_qm && !CHAT_RE.test(_qm[2]) && !QUERY_CHAT_RE.test(_qm[2]) && !/[，。！？、]/.test(_qm[2])) { const _r = countPieces(_qm[2].trim()); if (!(isNoQueryResult(_r) && quiet(chatId))) replyToLine(replyToken, _r); return; } }
 
   /* ---- 統整金額明細（依客戶看誰多少錢，須先比明細以免被統整金額吃掉）---- */
   { let _amd = text.match(/^(統整金額明細|金額統整明細|統計金額明細|金額明細|統整明細)\s*(.+)$/); if (_amd && /\d{1,2}\/\d{1,2}/.test(_amd[2])) { replyToLine(replyToken, summarizeAmountDetail(_amd[2].trim())); return; } }
@@ -839,6 +840,10 @@ function looksLikeWrite(text, cmd) {
   return /\d+\s*(件|箱|包|台(?!子))|改價|匯款|轉帳|入庫|出庫|寄運|寄冰|取消|清除|收\s*\d|×\s*\d|\*\s*\d/.test(String(text));
 }
 var CHAT_RE = /(還沒|沒報|報了沒|報一下|他們|我們|大概|應該|可能|好像|不知道|是不是|要不要|怎麼|為什麼|沒有|然後|可是|但是|其實|嗎$|吧$|呢$|喔$|啦$)/;
+// 查詢類（件數/總件數/搜尋）參數若含禮貌/聊天用語 → 視為聊天，不觸發查詢（整個參數比對，不限句尾）。
+var QUERY_CHAT_RE = /(麻煩|提供|一下|謝謝|請|幫我|記得|喔|耶|啦|唷)/;
+// 查詢結果是否「查無」（供安靜模式判斷：quiet 時查無不回覆）。
+function isNoQueryResult(rep) { return /沒有找到/.test(String(rep || '')); }
 function looksLikeChat(text) { return CHAT_RE.test(String(text || '')); }
 /* ==========================================================================
  * Intent 分類（第一層防呆 / 除錯可觀測性）
@@ -883,8 +888,8 @@ function parseCommand(text) {
   if (/^(查台子|台子總覽|台子剩餘|未收回台子|台子庫存)$/.test(text)) return { type: 'taizi_all' };
   if (/^(查退貨|退貨查詢|退貨紀錄|今日退貨)$/.test(text)) return { type: 'return_all' };
   if (m = text.match(/^查\s*(\S{1,16})\s*退貨(紀錄|記錄)?$/)) return { type: 'return_one', arg: m[1] };
-  if ((m = text.match(/^(總件數|件數)\s*(\S{1,12})$/)) && !CHAT_RE.test(m[2]) && !/[，。！？、]/.test(m[2])) return { type: 'count', arg: m[2] };
-  if ((m = text.match(/^(搜尋|收尋|搜)\s*(\S{1,16})$/)) && !CHAT_RE.test(m[2]) && !/[，。！？、]/.test(m[2])) return { type: 'search', arg: m[2] };
+  if ((m = text.match(/^(總件數|件數)\s*(\S{1,12})$/)) && !CHAT_RE.test(m[2]) && !QUERY_CHAT_RE.test(m[2]) && !/[，。！？、]/.test(m[2])) return { type: 'count', arg: m[2] };
+  if ((m = text.match(/^(搜尋|收尋|搜)\s*(\S{1,16})$/)) && !CHAT_RE.test(m[2]) && !QUERY_CHAT_RE.test(m[2]) && !/[，。！？、]/.test(m[2])) return { type: 'search', arg: m[2] };
   if ((m = text.match(/^(統整金額|統計金額|金額統整|統整|統計)\s*(.+)$/)) && /\d{1,2}\/\d{1,2}/.test(m[2])) return { type: 'amount', arg: m[2] };
   if (m = text.match(/^(\S{1,16})\s*改價\s+(.+)$/)) return { type: 'pricechange', cust: m[1], content: m[2] };
   if (m = text.match(/^(\S{1,16})\s*(匯款|轉帳)\s*([\d,]+)$/)) return { type: 'remit', cust: m[1], amount: m[3].replace(/,/g, '') };
