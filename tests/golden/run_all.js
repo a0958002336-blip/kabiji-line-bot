@@ -31,6 +31,7 @@ const SUITES = [
   'run_routes.js',        // 全路由回歸網（每路由一正一反＋查詢類零寫入）
   'run_v323.js',          // v3.2.3：聊天句誤觸件數/搜尋查詢＋查無尊重安靜
   'run_v33.js',           // v3.3：輸入失敗追蹤（各警示點留檔＋查詢排行）
+  'run_v34.js',           // v3.4：去貨主名全位置＋#備註規則（＋收款流程）
 ];
 
 let totalPass = 0, totalCount = 0, hardFail = 0;

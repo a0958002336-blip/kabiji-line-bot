@@ -94,6 +94,8 @@ const EXPORT_NAMES = [
   'summarizeAmount',
   'scanTaiziAnomalies',
   'codedOutstandingFor',
+  'stripVendors',
+  'shippingCleanSummary',
 ];
 
 /* ------------------------------------------------------------------ */

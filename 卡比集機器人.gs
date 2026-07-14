@@ -692,7 +692,7 @@ function handleEvent(event) {
       const sh = getSheet(SHEET_SHIP); const tz = getSheet(SHEET_TAIZI);
       if (shipRecs.length > 0) logIntent('寄運建立', text);
       ship.records.forEach(function (r) {
-        if (isShippingRecord(r, carrierSet)) sh.appendRow([nowStr(), r.customer, r.vendor, r.name, r.grade, r.qty, r.pack || '', r.logistics || '', '', r.note || '', r.unit || '件']);
+        if (isShippingRecord(r, carrierSet)) sh.appendRow([nowStr(), r.customer, r.vendor, stripVendors(r.name), r.grade, r.qty, r.pack || '', r.logistics || '', '', stripVendors(r.note || ''), r.unit || '件']);
         // 台子出庫：所有 pack=台子 品項都記（不論是否寄運；十方齋單不記寄運但台子要出庫）
         if (r.pack === '台子' && Number(r.qty) > 0) {
           if (freezerBalanceOf(r.customer, r.name) > 0) { taiziSkip.push(r.customer + ' ' + r.name); }
@@ -783,6 +783,25 @@ function handleEvent(event) {
       notifyOwner('📝【改價】\n客戶：' + customer + '\n內容：' + content + '\n' + nowStr());
       return;
   } }
+
+  /* ---- #備註：# 開頭但非任何已知指令 → 掛到「今日最近一筆」寄運或收款的備註（規則見 DECISIONS D-NOTE）---- */
+  if (/^#\S/.test(text)) { replyToLine(replyToken, appendRecentNote(text.replace(/^#\s*/, '').trim())); return; }
+}
+
+// #備註：把文字掛到「本日最近一筆」寄運或收款的備註欄（限當日；兩者取時間較新者）。
+function appendRecentNote(note) {
+  note = String(note || '').trim();
+  if (!note) return '⚠️ 備註是空的。用法：#你要記的備註（會掛到今天最近一筆寄運或收款）。';
+  const today = ymdNum(Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy/MM/dd'));
+  const shSheet = getSheet(SHEET_SHIP); const shData = shSheet.getDataRange().getValues();
+  const rcSheet = recvSheet(); const rcData = rcSheet.getDataRange().getValues();
+  let best = null;
+  for (let i = shData.length - 1; i >= 1; i--) { if (ymdNum(shData[i][0]) === today) { best = { sheet: shSheet, row: i + 1, noteCol: 10, time: String(shData[i][0]), label: '寄運 ' + (shData[i][1] || '') + ' ' + (shData[i][3] || ''), arr: shData[i] }; break; } }
+  for (let i = rcData.length - 1; i >= 1; i--) { if (ymdNum(rcData[i][0]) === today) { const rc = { sheet: rcSheet, row: i + 1, noteCol: 7, time: String(rcData[i][0]), label: '收款 ' + (rcData[i][2] || '') + ' ' + (Number(rcData[i][5]) || 0) + '元', arr: rcData[i] }; if (!best || rc.time > best.time) best = rc; break; } }
+  if (!best) return '📝 今日尚無可掛備註的資料（先建立寄運或收款，再用 #備註）。';
+  const cur = String(best.arr[best.noteCol - 1] || '');
+  best.sheet.getRange(best.row, best.noteCol).setValue(cur ? (cur + ' ' + note) : note);
+  return '📝 已把備註掛到今日最近一筆（' + best.label + '）：\n『' + note + '』';
 }
 
 /* ========================== 【工作群組/權限/別名 等基礎】 ========================== */
@@ -1106,8 +1125,11 @@ function parseShipping(text) {
         continue;
       }
       if (records.length > 0 && !nextHasItem(lines, k + 1)) {
-        const noteTxt = line.replace(/[（()）]/g, '').trim();
-        if (noteTxt) records.forEach(function (r) { if (r.customer === customer) r.note = (r.note ? r.note + ' ' : '') + noteTxt; });
+        // 只吃「括號備註」行(如（修清）)；純文字閒聊不當備註(改由 #備註 指令)，直接略過不儲存
+        if (/[（(][^)）]*[)）]/.test(line)) {
+          const noteTxt = line.replace(/[（()）]/g, '').trim();
+          if (noteTxt) records.forEach(function (r) { if (r.customer === customer) r.note = (r.note ? r.note + ' ' : '') + noteTxt; });
+        }
         continue;
       }
       const wm = line.match(/寄\s*[車運]\s*([^\s)）]+)/) || line.match(/寄\s*([^\s)）]+)\s*$/);
@@ -1121,9 +1143,16 @@ function parseShipping(text) {
   if (msgLogistics) records.forEach(function (r) { if (!r.logistics) r.logistics = msgLogistics; });
   return { count: records.length, records: records, unresolved: unresolvedItems };
 }
+// 去貨主名：把「已登記貨主」名字從任何字串移除（涵蓋標題/明細/備註，含黏字）。未登記者無法辨識，需 #新增貨主 補登。
+function stripVendors(str) {
+  let s = String(str || '');
+  const vs = getVendors().slice().sort(function (a, b) { return b.length - a.length; });   // 長名優先，避免子字串先被吃掉
+  vs.forEach(function (v) { if (v) s = s.split(v).join(''); });
+  return s.replace(/\s{2,}/g, ' ').trim();
+}
 function shippingCleanSummary(recs) {
   const byCust = {}; const order = [];
-  recs.forEach(function (r) { const c = r.customer + (r.logistics ? '（寄車' + r.logistics + '）' : ''); if (!byCust[c]) { byCust[c] = []; order.push(c); } byCust[c].push('・' + r.name + (r.grade ? ' ' + r.grade : '') + ' ' + r.qty + (r.unit || '件') + (r.pack ? '（' + r.pack + '）' : '') + (r.note ? '（' + r.note + '）' : '')); });
+  recs.forEach(function (r) { const c = stripVendors(r.customer) + (r.logistics ? '（寄車' + r.logistics + '）' : ''); if (!byCust[c]) { byCust[c] = []; order.push(c); } byCust[c].push('・' + stripVendors(r.name) + (r.grade ? ' ' + r.grade : '') + ' ' + r.qty + (r.unit || '件') + (r.pack ? '（' + r.pack + '）' : '') + (r.note ? '（' + stripVendors(r.note) + '）' : '')); });
   let out = '';
   order.forEach(function (c) { out += '【' + c + '】\n' + byCust[c].join('\n') + '\n'; });
   return out.trim();
