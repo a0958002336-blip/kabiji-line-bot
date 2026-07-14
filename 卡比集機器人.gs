@@ -22,7 +22,7 @@ const SHEET_DUTY     = '外勤補貼';
 const SHEET_RECEIVABLE = '待收款';   // Task4 收款/未收款（含軟刪除稽核）
 const SHEET_FAIL     = '輸入失敗紀錄';   // v3.3 輸入失敗追蹤
 // 版本識別：交付部署前務必更新 BOT_VERSION / BOT_BUILD(最後 commit 短hash) / BOT_DATE（見 DECISIONS 開發紀律）
-var BOT_VERSION = 'v3.4';
+var BOT_VERSION = 'v3.4.1';
 var BOT_BUILD = 'eea3344';
 var BOT_DATE = '2026/07/14';
 function versionMessage() {
@@ -46,6 +46,7 @@ function versionMessage() {
     '【v3.3 輸入失敗追蹤】各格式錯誤警示點自動留檔到「輸入失敗紀錄」(安靜被靜默的也留)；老闆打「查輸入失敗／今日輸入失敗／查輸入失敗 7/1-7/10」看清單＋每人失敗次數排行\n' +
     '【v3.4 去貨主名】已登記貨主在標題/明細/備註全位置去乾淨(未登記請 #新增貨主)；【#備註】#開頭非指令→掛今日最近一筆寄運/收款備註，無#閒聊一律無視不誤存\n' +
     '【v3.4 收款流程】#6986收款 名字／回覆待收款訊息綁定收款人／#6986 查單／#未收 巡帳／#已收 6986 完款；同客戶多張會列單號讓你選\n' +
+    '【v3.4.1 修】鐵架單行出庫需含「鐵」才判定，避免「碼頭 美婷要一件田228 1*1200」這類人話被誤攔\n' +
     '你看到這行＝最新程式已生效（對照上方版本＋hash 即可確認是否新版）。';
 }
 const FONT_SIZE = 18;
@@ -778,7 +779,7 @@ function handleEvent(event) {
     if (rb.count > 0) { replyToLine(replyToken, rb.reply); return; }
   }
 
-  if (/[*＊×xX]\s*\d+/.test(text) && !/【/.test(text)) {
+  if (/[*＊×xX]\s*\d+/.test(text) && !/【/.test(text) && /鐵/.test(text)) {   // 需含「鐵」才當鐵架出庫，避免「碼頭 美婷要一件田228 1*1200」這類人話被誤攔
     const ri = handleRackInlineOut(text);
     if (ri.count > 0) { replyToLine(replyToken, ri.reply); return; }
   }

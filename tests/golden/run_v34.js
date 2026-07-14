@@ -71,10 +71,13 @@ function rows(env, s) { return env.sheets[s] ? env.sheets[s].__rows.slice(1) : [
   const env2 = mkEnv();
   send(env2, '6986\n高山228 特 100件 寄旭陽\n（修清）');
   check('③2 括號備註仍保留', rows(env2, SHIP)[0][9] === '修清', JSON.stringify(rows(env2, SHIP)[0]));
-  // 純閒聊 → 無反應、無寫入
-  const env3 = mkEnv();
-  const r = send(env3, '可以連鐵架一起需紀錄');
-  check('③3 無#閒聊 → 無回應、無寄運', r === '' && rows(env3, SHIP).length === 0, JSON.stringify(r));
+  // 純閒聊 → 無反應、無寫入（真實舊版誤攔案例，新版必須裝死）
+  const RACK = '鐵架庫存';
+  ['可以連鐵架一起需紀錄', '碼頭 美婷要一件田228 1*1200'].forEach(function (t, i) {
+    const e = mkEnv();
+    const r = send(e, t);
+    check('③3.' + (i + 1) + ' 閒聊「' + t + '」→ 裝死(無回應、零寫入)', r === '' && rows(e, SHIP).length === 0 && rows(e, RACK).length === 0, JSON.stringify(r) + ' 鐵架=' + rows(e, RACK).length);
+  });
 })();
 
 /* ========== ④ 收款流程 ========== */
