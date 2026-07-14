@@ -22,9 +22,9 @@ const SHEET_DUTY     = '外勤補貼';
 const SHEET_RECEIVABLE = '待收款';   // Task4 收款/未收款（含軟刪除稽核）
 const SHEET_FAIL     = '輸入失敗紀錄';   // v3.3 輸入失敗追蹤
 // 版本識別：交付部署前務必更新 BOT_VERSION / BOT_BUILD(最後 commit 短hash) / BOT_DATE（見 DECISIONS 開發紀律）
-var BOT_VERSION = 'v3.3';
+var BOT_VERSION = 'v3.4';
 var BOT_BUILD = '88b3d31';
-var BOT_DATE = '2026/07/12';
+var BOT_DATE = '2026/07/14';
 function versionMessage() {
   return '📦 卡比集機器人 ' + BOT_VERSION + ' (' + BOT_BUILD + ') ' + BOT_DATE + '\n本輪重點修復：\n' +
     '【意圖判斷層】收台≠收款、聊天/填充詞不建寄運、引用(Line Quote)訊息唯讀\n' +
@@ -44,6 +44,8 @@ function versionMessage() {
     '【v3.2.2 修】計價單日期戳移到權限閘門之前：唯讀(客戶/市場)群組開啟後也能觸發(只回日期、零寫入)\n' +
     '【v3.2.3 修】件數/搜尋查詢：參數含禮貌/聊天用語(麻煩|提供|一下|請|喔…)不再誤觸；查無結果時尊重安靜模式(有結果照回)\n' +
     '【v3.3 輸入失敗追蹤】各格式錯誤警示點自動留檔到「輸入失敗紀錄」(安靜被靜默的也留)；老闆打「查輸入失敗／今日輸入失敗／查輸入失敗 7/1-7/10」看清單＋每人失敗次數排行\n' +
+    '【v3.4 去貨主名】已登記貨主在標題/明細/備註全位置去乾淨(未登記請 #新增貨主)；【#備註】#開頭非指令→掛今日最近一筆寄運/收款備註，無#閒聊一律無視不誤存\n' +
+    '【v3.4 收款流程】#6986收款 名字／回覆待收款訊息綁定收款人／#6986 查單／#未收 巡帳／#已收 6986 完款；同客戶多張會列單號讓你選\n' +
     '你看到這行＝最新程式已生效（對照上方版本＋hash 即可確認是否新版）。';
 }
 const FONT_SIZE = 18;
@@ -197,6 +199,9 @@ function handleEvent(event) {
   // ★ 引用(Line Quote)訊息：只能當參考，禁止直接觸發任何 ERP 寫入（P0 安全規則）
   //   —— 引用內容僅允許純查詢指令；其餘一律不執行、不寫入。
   if (isQuote) {
+    // 例外(寫死不擴大)：引用「待收款」bot 訊息 → 只允許「寫收款人(綁定)」這一種寫入；其餘引用一律維持唯讀。
+    const _qmid = event.message && event.message.quotedMessageId;
+    if (_qmid) { const _b = receivableBindByQuote(String(_qmid), getDisplayName(chatId, source.userId), source.userId, text); if (_b && _b.handled) { replyToLine(replyToken, _b.reply); return; } }
     const qcmd = parseCommand(text);
     if (qcmd && MARKET_READ[qcmd.type]) { const reply = runReadCommand(qcmd, chatId); if (reply) replyToLine(replyToken, reply); }
     return;
@@ -639,6 +644,16 @@ function handleEvent(event) {
     const rpm = text.match(/^#?收款人\s*([Rr]\d+)?\s*(\S{1,12})\s*$/);
     if (rpm && rpm[2]) { replyToLine(replyToken, receivableAssign(rpm[1] || '', rpm[2])); return; }
   }
+  /* ---- 收款流程(v3.4)：#<客戶號>收款 名字（指定收款人）／#未收（未完款清單）／#<客戶號>[誰收款]（單狀態）---- */
+  { const _am = text.match(/^#(\d{2,})收款\s+(\S{1,12})$/); if (_am) {
+      const r = receivableAssignByCustomer(_am[1], _am[2], source.userId);
+      if (r.none) replyToLine(replyToken, '查無「' + _am[1] + '」的未完款單（打「#未收」看清單）。');
+      else if (r.candidates) replyToLine(replyToken, recvChooseReply(_am[1], r.candidates));
+      else replyToLine(replyToken, '✅ 已指定收款人：' + r.done.customer + '／' + r.done.amount + ' 元 由 ' + r.done.who + ' 收款（單號 ' + r.done.id + '）\n（完款：#已收 ' + _am[1] + '）');
+      return;
+  } }
+  if (/^#未收\s*$/.test(text)) { replyToLine(replyToken, receivableUnpaidList()); return; }
+  { const _qm = text.match(/^#(\d{2,})(?:\s*誰收款)?\s*$/); if (_qm) { replyToLine(replyToken, receivableStatusByCustomer(_qm[1])); return; } }
   if (/^#(待收款|未收款|今日待收款|今日收款|待辦)\s*$/.test(text)) { replyToLine(replyToken, receivableQuery(/今日/.test(text))); return; }
   if (/^#收款明細\s*$/.test(text)) { replyToLine(replyToken, receivableDetail()); return; }
   if (/^#(已收|取消收款)\s*$/.test(text)) { replyToLine(replyToken, '格式：#已收 R編號（或客戶名）／#取消收款 R編號。打「#待收款」看清單。'); return; }
@@ -670,7 +685,8 @@ function handleEvent(event) {
       logIntent('收款建立', text);
       const cr = recvCreate(rd, (source.groupId || source.roomId || ''), (event.message && event.message.id) || '', getDisplayName(chatId, source.userId), text);
       if (cr.dup) { replyToLine(replyToken, '⚠️ 這筆收款已存在（24小時內同客戶同金額同品項或同訊息），未重複建立。'); return; }
-      replyToLine(replyToken, '💰 已建立待收款：' + (rd.customer || '(未填客戶)') + (rd.supplier ? '／' + rd.supplier : '') + '｜' + (rd.item || '') + '｜' + rd.amount + ' 元\n（收款人待指定；收款完成請打「#已收 ' + (rd.customer || '客戶') + '」）');
+      const _sid = replyToLine(replyToken, '💰 已建立待收款：' + (rd.customer || '(未填客戶)') + (rd.supplier ? '／' + rd.supplier : '') + '｜' + (rd.item || '') + '｜' + rd.amount + ' 元\n（指定收款人：回覆本則、或打「#' + (rd.customer || '客戶') + '收款 名字」；完款：#已收 ' + (rd.customer || '客戶') + '）');
+      if (_sid && cr.row) recvSetBindMsg(cr.row, _sid);   // 記 bot 訊息ID → 供回覆綁定反查
       return;
     }
   }
@@ -2251,7 +2267,7 @@ function commandSheet() {
     '【冰庫】', '・查冰庫　查冰庫 客戶名', '・查冰庫總庫存', '・整張寄冰：單據最後打「冰」或「寄冰」',
     '・貼查冰庫結果後，每項可加：出N(出貨)／修改N(改成N)／取消(歸0)', '・批次：第一行「修改庫存」→客戶→每行 品名 數量', '',
     '【鐵架/台子】', '・查鐵架　查台子', '・出庫：客戶 鐵架名*數量（系統自動配代號）', '・收回：代號*數量收回（例 a*2收回；多筆 a*2 b*3收回；a收回=全收）', '・舊資料轉代號：#鐵架轉代號（限老闆）', '',
-    '【收款】', '・#待收款／#收款明細', '・收款人 名字（指定最新一筆）／收款人 R0003 名字', '・#已收 R0003／#取消收款R0003（空格可省）', '',
+    '【收款】', '・#待收款／#未收（未完款清單）／#收款明細', '・指定收款人：#6986收款 阿良／收款人 R0003 名字／或回覆待收款訊息', '・查單：#6986（或 #6986 誰收款）', '・完款：#已收 6986（或 R0003）／#取消收款 R0003', '',
     '【寄運】', '・退貨：[日期] 客戶 品名 退N台', '・記錄：把寄運單據貼上', '・拉出：旭陽寄運資料 6/20',
     '・取消：客戶：清除(整筆)／客戶：品名 數量 取消(單項)／寄運資料 清除 確定(全部)',
     '・場外增改：寄運 客戶：品名 數量(新增/設定)／+N(增)／-N(減)／修改N／取消', '',
@@ -3202,10 +3218,14 @@ function recvCreate(p, groupId, messageId, byUser, rawText) {
     }
   }
   const lock = acquireLock(5000);
-  try { sheet.appendRow([nowStr(), todayYMD(), p.customer, p.supplier, p.item, p.amount, p.note, '未收', normalizeEmployeeName(byUser || ''), '', '', '', groupId || '', messageId || '', rawText || '', '', '', '']); }
+  try { sheet.appendRow([nowStr(), todayYMD(), p.customer, p.supplier, p.item, p.amount, p.note, '未收', normalizeEmployeeName(byUser || ''), '', '', '', groupId || '', messageId || '', rawText || '', '', '', '', '', '', '']); }
   finally { lock.releaseLock(); }
-  return { created: true, p: p };
+  return { created: true, p: p, row: sheet.getLastRow() };   // row：1-based，供回覆綁定記 bot 訊息ID
 }
+// 收款流程共用欄位(0-based)：9收款人 10指定時間 18收款人ID 19完款時間 20綁定訊息ID。
+function recvRow21(i) { return recvSheet().getRange(i + 1, 1, 1, 21).getValues()[0]; }
+function recvSetBindMsg(rowNum, botMsgId) { if (rowNum && botMsgId) recvSheet().getRange(rowNum, 21).setValue(String(botMsgId)); }   // 綁定訊息ID(col21)
+function recvDaysOutstanding(createdAt) { try { const d = ymdNum(createdAt); const t = ymdNum(Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy/MM/dd')); if (!d || !t) return 0; const a = new Date(Math.floor(d / 10000), Math.floor(d / 100) % 100 - 1, d % 100); const b = new Date(Math.floor(t / 10000), Math.floor(t / 100) % 100 - 1, t % 100); return Math.max(0, Math.round((b - a) / 86400000)); } catch (e) { return 0; } }
 function todayYMD() { return Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy/MM/dd'); }
 // R 編號＝資料列索引 data[i]（軟刪除不移列，故 ID 穩定，清單顯示與 #取消/#已收 接受的 ID 一致）。
 function recvRowId(i) { return 'R' + ('0000' + i).slice(-4); }
@@ -3238,8 +3258,8 @@ function receivableClose(key, byUser, all) {
   const res = recvResolve(key, all); if (!res) return { none: true };
   if (res.candidates) return { candidates: res.candidates };
   const done = res.rows.map(function (i) {
-    const arr = recvSheet().getRange(i + 1, 1, 1, 18).getValues()[0];
-    arr[7] = '已收'; arr[9] = normalizeEmployeeName(byUser || arr[9] || ''); arr[10] = nowStr(); arr[11] = nowStr();
+    const arr = recvRow21(i);
+    arr[7] = '已收'; arr[9] = arr[9] || normalizeEmployeeName(byUser || ''); arr[10] = arr[10] || nowStr(); arr[11] = nowStr(); arr[19] = nowStr();   // 保留已指定收款人；完款只記完款時間(col19)
     recvUpdateRow(i + 1, arr);
     return { id: recvRowId(i), customer: arr[2], supplier: arr[3], item: arr[4], amount: arr[5] };
   });
@@ -3249,7 +3269,7 @@ function receivableCancel(key, byUser, reason, all) {
   const res = recvResolve(key, all); if (!res) return { none: true };
   if (res.candidates) return { candidates: res.candidates };   // 多筆命中 → 回候選，不自行挑一筆刪
   const done = res.rows.map(function (i) {
-    const arr = recvSheet().getRange(i + 1, 1, 1, 18).getValues()[0];
+    const arr = recvRow21(i);
     arr[7] = '取消'; arr[15] = nowStr(); arr[16] = normalizeEmployeeName(byUser || ''); arr[17] = String(reason || '').trim();   // 軟刪除
     recvUpdateRow(i + 1, arr);
     return { id: recvRowId(i), customer: arr[2], supplier: arr[3], item: arr[4], amount: arr[5] };
@@ -3686,7 +3706,7 @@ function headerFor(name) {
   if (name === SHEET_RETURN)  return ['時間', '客戶', '品名', '數量', '單位'];
   if (name === SHEET_TARE)    return ['車牌', '空車重量', '名稱', '更新時間'];
   if (name === SHEET_DUTY)    return ['時間', '員工', '地點', '出發時間', '補貼', '備註'];
-  if (name === SHEET_RECEIVABLE) return ['建立時間', '日期', '客戶', '供應商', '品項', '金額', '備註', '狀態', '建立者', '收款人', '收款時間', '結案時間', '來源群組', '來源訊息ID', '原文', '刪除時間', '刪除者', '取消原因'];
+  if (name === SHEET_RECEIVABLE) return ['建立時間', '日期', '客戶', '供應商', '品項', '金額', '備註', '狀態', '建立者', '收款人', '指定時間', '結案時間', '來源群組', '來源訊息ID', '原文', '刪除時間', '刪除者', '取消原因', '收款人ID', '完款時間', '綁定訊息ID'];
   if (name === SHEET_FAIL)    return ['時間', '類型', '輸入者', '原文', '群組ID'];
   return ['時間', '客戶', '類型', '金額', '內容', '回報人'];
 }
@@ -3717,7 +3737,12 @@ function replyToLine(replyToken, text) {
     payload: JSON.stringify({ replyToken: replyToken, messages: splitForLine(text) }),
     muteHttpExceptions: true
   });
-  try { const code = res.getResponseCode(); if (code !== 200) console.error('LINE reply ' + code + ': ' + String(res.getContentText()).slice(0, 100)); } catch (e) { }
+  try {
+    const code = res.getResponseCode(); if (code !== 200) { console.error('LINE reply ' + code + ': ' + String(res.getContentText()).slice(0, 100)); return null; }
+    const body = JSON.parse(res.getContentText() || '{}');   // LINE 回應含 sentMessages[].id → 供回覆綁定反查
+    if (body.sentMessages && body.sentMessages.length && body.sentMessages[0].id) return String(body.sentMessages[0].id);
+  } catch (e) { }
+  return null;
 }
 // Task7：safeReply 與 replyToLine 同義（規格別名），供明確語意呼叫。
 function safeReply(replyToken, text) { return replyToLine(replyToken, text); }
@@ -3821,9 +3846,77 @@ function receivableAssign(idKey, name) {
     if (target < 0) { for (let i = data.length - 1; i >= 1; i--) { if (String(data[i][7]) === '未收' && !data[i][15]) { target = i; break; } } }
     if (target < 0) return '目前沒有未收款可指定收款人（打「#待收款」看清單）。';
   }
-  const arr = sheet.getRange(target + 1, 1, 1, 18).getValues()[0];
-  arr[9] = who; recvUpdateRow(target + 1, arr);
+  const arr = recvRow21(target);
+  arr[9] = who; arr[10] = arr[10] || nowStr();   // 收款人 + 指定時間
+  recvUpdateRow(target + 1, arr);
   return '✅ 已指定收款人：' + recvRowId(target) + '｜' + (arr[2] || '') + (arr[3] ? '／' + arr[3] : '') + '｜' + (Number(arr[5]) || 0) + ' 元 → 收款人 ' + who + '\n（收款完成請打「#已收 ' + recvRowId(target) + '」；指定其他筆：收款人 R編號 名字）';
+}
+/* ---- 收款流程(v3.4)：以「客戶號」為單號的指定/查詢/巡帳 + 回覆綁定 ---- */
+function recvOpenRows(cust) {   // status=未收 且未軟刪 且客戶符合（同客戶多張未完款）
+  const data = recvSheet().getDataRange().getValues(); const k = String(cust).trim(); const hits = [];
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][7]) !== '未收' || data[i][15]) continue;
+    if (String(data[i][2]) === k || String(data[i][2]).indexOf(k) !== -1) hits.push(i);
+  }
+  return hits;
+}
+function recvDoAssign(i, name, userId) {
+  const arr = recvRow21(i); const who = normalizeEmployeeName(name);
+  arr[9] = who; arr[10] = arr[10] || nowStr(); arr[18] = userId || arr[18] || '';   // 收款人 / 指定時間 / 收款人ID
+  recvUpdateRow(i + 1, arr);
+  return { id: recvRowId(i), customer: arr[2], amount: Number(arr[5]) || 0, who: who };
+}
+function receivableAssignByCustomer(cust, name, userId) {
+  const hits = recvOpenRows(cust);
+  if (!hits.length) return { none: true };
+  if (hits.length > 1) return { candidates: hits };   // 多張未完款 → 列清單讓使用者用 R編號 指定
+  return { done: recvDoAssign(hits[0], name, userId) };
+}
+function recvChooseReply(cust, hits) {
+  const data = recvSheet().getDataRange().getValues();
+  return '⚠️ 「' + cust + '」有 ' + hits.length + ' 張未完款，請改用單號指定收款人（例：收款人 ' + recvRowId(hits[0]) + ' 名字）：\n' +
+    hits.map(function (i) { return recvRowId(i) + '｜' + (Number(data[i][5]) || 0) + ' 元｜' + ymdStr(data[i][0]) + (data[i][9] ? '｜收款人 ' + data[i][9] : ''); }).join('\n');
+}
+function receivableStatusByCustomer(cust) {
+  const data = recvSheet().getDataRange().getValues(); const k = String(cust).trim();
+  const open = [], closed = [];
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][15]) continue;
+    if (!(String(data[i][2]) === k || String(data[i][2]).indexOf(k) !== -1)) continue;
+    if (String(data[i][7]) === '未收') open.push(i); else if (String(data[i][7]) === '已收') closed.push(i);
+  }
+  const fmt = function (i) {
+    const d = data[i]; const st = String(d[7]) === '已收' ? '已完款' : (d[9] ? '收款中' : '未收');
+    return '單號 ' + recvRowId(i) + '（客戶 ' + (d[2] || '') + '）\n・金額：' + (Number(d[5]) || 0) + ' 元\n・收款人：' + (d[9] || '未指定') + '\n・狀態：' + st + (String(d[7]) === '已收' && d[19] ? '（完款 ' + d[19] + '）' : '') + '\n・建立：' + (d[0] || '');
+  };
+  if (open.length) return '📇 ' + cust + ' 收款狀態：\n' + open.map(fmt).join('\n――\n');
+  if (closed.length) return '📇 ' + cust + ' 收款狀態：\n' + fmt(closed[closed.length - 1]);
+  return '查無「' + cust + '」的收款單。';
+}
+function receivableUnpaidList() {
+  const data = recvSheet().getDataRange().getValues(); const rows = []; let total = 0;
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][7]) !== '未收' || data[i][15]) continue;   // 未完款＝未收(含收款中)
+    const amt = Number(data[i][5]) || 0; total += amt;
+    rows.push(recvRowId(i) + '｜' + (data[i][2] || '') + '｜' + amt + ' 元｜' + (data[i][9] || '未指定') + '｜掛 ' + recvDaysOutstanding(data[i][0]) + ' 天');
+  }
+  if (!rows.length) return '📋 目前沒有未完款。';
+  return '📋 未完款清單（' + rows.length + ' 筆）：\n單號｜客戶｜金額｜收款人｜掛幾天\n' + rows.join('\n') + '\n――――――\n合計未完款：' + total + ' 元';
+}
+// 回覆綁定：引用待收款 bot 訊息 → 綁定/改人/確認（唯一允許的引用寫入，範圍寫死）。
+function receivableBindByQuote(botMsgId, name, userId, text) {
+  const data = recvSheet().getDataRange().getValues();
+  let idx = -1;
+  for (let i = 1; i < data.length; i++) { if (String(data[i][20]) && String(data[i][20]) === String(botMsgId)) { idx = i; break; } }
+  if (idx < 0) return { handled: false };   // 非待收款 bot 訊息 → 不屬本例外，交回唯讀
+  const d = data[idx];
+  if (d[15]) return { handled: true, reply: '此單已取消，無法綁定收款人。' };
+  if (String(d[7]) === '已收') return { handled: true, reply: '此單已結案（' + (d[2] || '') + '／' + (Number(d[5]) || 0) + ' 元 由 ' + (d[9] || '') + ' 完款）。' };
+  const who = normalizeEmployeeName(name); const cur = String(d[9] || '');
+  if (!cur) { recvDoAssign(idx, name, userId); return { handled: true, reply: (d[2] || '') + '/' + (Number(d[5]) || 0) + '元 由 ' + who + ' 收款' }; }
+  if (cur === who) return { handled: true, reply: '此單已由你（' + who + '）收款中。' };
+  if (/確認/.test(String(text))) { recvDoAssign(idx, name, userId); return { handled: true, reply: '✅ 已改由 ' + who + ' 收款（' + (d[2] || '') + '/' + (Number(d[5]) || 0) + '元）。' }; }
+  return { handled: true, reply: '此單已由 ' + cur + ' 收款中，要改為你嗎？回『確認』改人。' };
 }
 /* ---- 鐵架代號：產生下一個代號（A、B…Z、AA…；跳過含 X 的代號，避免和乘號 x 混淆）---- */
 function nextRackCode() {

@@ -96,6 +96,12 @@ const EXPORT_NAMES = [
   'codedOutstandingFor',
   'stripVendors',
   'shippingCleanSummary',
+  // ---- v3.4 收款流程 / #備註 ----
+  'receivableAssignByCustomer',
+  'receivableStatusByCustomer',
+  'receivableUnpaidList',
+  'receivableBindByQuote',
+  'appendRecentNote',
 ];
 
 /* ------------------------------------------------------------------ */
@@ -212,11 +218,14 @@ function createEnv() {
     getUserLock() { return this.getScriptLock(); },
   };
 
+  let __botMsgSeq = 0;
   const UrlFetchApp = {
     fetch(url, opts) {
       urlFetchCalls.push({ url, opts });
+      let content = '{}';
+      if (/\/message\/reply/.test(url)) { __botMsgSeq++; content = JSON.stringify({ sentMessages: [{ id: 'BOTMSG_' + __botMsgSeq }] }); }   // 模擬 LINE 回應含 sentMessages id（回覆綁定用）
       return {
-        getContentText: () => '{}',
+        getContentText: () => content,
         getResponseCode: () => 200,
         getResponseHeaders: () => ({}),
         getBlob: () => ({}),
