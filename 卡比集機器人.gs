@@ -22,7 +22,7 @@ const SHEET_DUTY     = '外勤補貼';
 const SHEET_RECEIVABLE = '待收款';   // Task4 收款/未收款（含軟刪除稽核）
 const SHEET_FAIL     = '輸入失敗紀錄';   // v3.3 輸入失敗追蹤
 // 版本識別：交付部署前務必更新 BOT_VERSION / BOT_BUILD(最後 commit 短hash) / BOT_DATE（見 DECISIONS 開發紀律）
-var BOT_VERSION = 'v3.4.2';
+var BOT_VERSION = 'v3.4.3';
 var BOT_BUILD = 'fbee1c7';
 var BOT_DATE = '2026/07/15';
 function versionMessage() {
@@ -48,6 +48,7 @@ function versionMessage() {
     '【v3.4 收款流程】#6986收款 名字／回覆待收款訊息綁定收款人／#6986 查單／#未收 巡帳／#已收 6986 完款；同客戶多張會列單號讓你選\n' +
     '【v3.4.1 修】鐵架單行出庫需含「鐵」才判定，避免「碼頭 美婷要一件田228 1*1200」這類人話被誤攔\n' +
     '【v3.4.2 修】鐵架全路徑(單行/多行/首行動詞/前置閘)一律要含「鐵架」二字才觸發，「進口山東 *5」等多行交易人話不再被誤攔；哲學：明確關鍵字才動作，格式相似不足以觸發\n' +
+    '【v3.4.3 修】去貨主名補顯示層防線：寄運彙總/查詢、冰庫寄存/退貨/改價/損耗等所有品名輸出一律再過濾一次，貨主登記前存的舊髒列查詢時也不外洩貨主名(不回溯改資料)；冰庫總量按貨主分組為刻意設計故豁免\n' +
     '你看到這行＝最新程式已生效（對照上方版本＋hash 即可確認是否新版）。';
 }
 const FONT_SIZE = 18;
@@ -236,7 +237,7 @@ function handleEvent(event) {
     }
     if (/取消|清除/.test(text)) {                          // 整筆/逐項刪除
       const r = cancelShipping(text);
-      if (r.count > 0) out.push('🗑️ 已刪除寄運 ' + r.count + ' 筆：\n' + r.summary.join('\n'));
+      if (r.count > 0) out.push(outClean('🗑️ 已刪除寄運 ' + r.count + ' 筆：\n' + r.summary.join('\n')));
     }
     if (out.length) { replyToLine(replyToken, out.join('\n\n')); return; }
     if (/取消|清除/.test(text) || MODRE.test(text)) {      // 有下編輯字但找不到 → 給正確打法
@@ -577,7 +578,7 @@ function handleEvent(event) {
           else replyToLine(replyToken, '找不到符合的損耗/改價紀錄，沒有刪除。');
         } else {
           const r = cancelShipping(text);
-          if (r.count > 0) replyToLine(replyToken, '🗑️ 已刪除寄運 ' + r.count + ' 筆：\n' + r.summary.join('\n'));
+          if (r.count > 0) replyToLine(replyToken, outClean('🗑️ 已刪除寄運 ' + r.count + ' 筆：\n' + r.summary.join('\n')));
           else replyToLine(replyToken, '找不到符合的寄運紀錄，沒有刪除。');
         }
         return;
@@ -819,7 +820,7 @@ function appendRecentNote(note) {
   if (!best) return '📝 今日尚無可掛備註的資料（先建立寄運或收款，再用 #備註）。';
   const cur = String(best.arr[best.noteCol - 1] || '');
   best.sheet.getRange(best.row, best.noteCol).setValue(cur ? (cur + ' ' + note) : note);
-  return '📝 已把備註掛到今日最近一筆（' + best.label + '）：\n『' + note + '』';
+  return outClean('📝 已把備註掛到今日最近一筆（' + best.label + '）：\n『' + note + '』');   // label 含品名/客戶，去貨主名
 }
 
 /* ========================== 【工作群組/權限/別名 等基礎】 ========================== */
@@ -1168,6 +1169,20 @@ function stripVendors(str) {
   vs.forEach(function (v) { if (v) s = s.split(v).join(''); });
   return s.replace(/\s{2,}/g, ' ').trim();
 }
+// 顯示層去貨主名（多行安全）：把「已登記貨主名」從整段輸出移除，但保留換行與縮排（逐行處理、不跨行壓空白，
+// 故不會把多行訊息壓成一行）。這是所有 user-facing 品名/客戶/備註輸出的最後一道防線——涵蓋「貨主登記前就存進去、
+// 品名欄含貨主名的髒舊列」，不需回溯改資料即可在顯示時遮乾淨。冪等：乾淨字串再過一次不變。
+// ⚠️ 例外：冰庫總量 formatStockGrouped 刻意以貨主為分組維度顯示（內部庫存查詢），不套用此函式（決策 Q-B 豁免）。
+function outClean(str) {
+  if (str == null) return str;
+  const vs = getVendors().slice().sort(function (a, b) { return b.length - a.length; });   // 長名優先，避免子字串先被吃掉
+  if (!vs.length) return str;
+  return String(str).split('\n').map(function (line) {
+    let s = line;
+    vs.forEach(function (v) { if (v) s = s.split(v).join(''); });
+    return s.replace(/ {2,}/g, ' ');   // 只壓同列多餘半形空白；不動換行、不動全形縮排(　)、不 trim 以保版面
+  }).join('\n');
+}
 function shippingCleanSummary(recs) {
   const byCust = {}; const order = [];
   recs.forEach(function (r) { const c = stripVendors(r.customer) + (r.logistics ? '（寄車' + r.logistics + '）' : ''); if (!byCust[c]) { byCust[c] = []; order.push(c); } byCust[c].push('・' + stripVendors(r.name) + (r.grade ? ' ' + r.grade : '') + ' ' + r.qty + (r.unit || '件') + (r.pack ? '（' + r.pack + '）' : '') + (r.note ? '（' + stripVendors(r.note) + '）' : '')); });
@@ -1353,7 +1368,7 @@ function handleShippingModify(text) {
   }
   Object.keys(delRows).map(Number).sort(function (a, b) { return b - a; }).forEach(function (i) { sheet.deleteRow(i + 1); });
   if (!cnt) return { count: 0, reply: '🚚 找不到要修改/取消的寄運資料（品名/數量要跟畫面一致）。' };
-  return { count: cnt, reply: '🚚 已處理寄運：\n' + summary.join('\n') };
+  return { count: cnt, reply: outClean('🚚 已處理寄運：\n' + summary.join('\n')) };
 }
 function clearAllShipping() { const sheet = getSheet(SHEET_SHIP); const last = sheet.getLastRow(); const n = Math.max(0, last - 1); if (n > 0) sheet.deleteRows(2, n); return n; }
 function clearAllRows(sheetName) { const sheet = getSheet(sheetName); const last = sheet.getLastRow(); const n = Math.max(0, last - 1); if (n > 0) sheet.deleteRows(2, n); return n; }
@@ -1391,7 +1406,7 @@ function shippingPull(key, dateArg) {
     byCust[c].forEach(function (it) { out += '\n' + it; });
     if (byNote[c] && byNote[c].length) out += '\n　📍' + byNote[c].join('、');
   });
-  return out;
+  return outClean(out);   // 顯示層去貨主名：救「登記前存的髒品名/備註舊列」，不改試算表
 }
 // 已知寄運客戶名（今天寄運資料的客戶 + 物流商客戶名單），長的先比，供無冒號時辨識客戶
 // Task5：既有數字客戶白名單（附錄B保底）+ 動態 knownShipCustomers。純數字抬頭僅白名單內放行。
@@ -1479,12 +1494,12 @@ function handleShippingCmd(text) {
       summary.push(op.cust + ' ' + op.name + (op.grade ? ' ' + op.grade : '') + (op.pack ? '（' + op.pack + '）' : '') + '：' + cur + ' → ' + nb);
     } else {
       const nb = (op.mode === 'dec') ? 0 : op.num;
-      const row = [nowStr(), op.cust, '', op.name, op.grade || '', nb, op.pack || '', getMainCarrier(), '', '', '件'];
+      const row = [nowStr(), op.cust, '', stripVendors(op.name), op.grade || '', nb, op.pack || '', getMainCarrier(), '', '', '件'];   // 寫入分欄乾淨：品名去貨主名(比照主寫入路徑 line 713)，補此場外寫入路徑的漏
       sheet.appendRow(row); data.push(row);
       summary.push('新增：' + op.cust + ' ' + op.name + (op.grade ? ' ' + op.grade : '') + (op.pack ? '（' + op.pack + '）' : '') + ' ' + nb);
     }
   });
-  return { count: summary.length, reply: '🚚 寄運已更新：\n' + summary.join('\n') };
+  return { count: summary.length, reply: outClean('🚚 寄運已更新：\n' + summary.join('\n')) };
 }
 function scanSlip(text, chatId) {
   const lines = String(text).split('\n').map(function (l) { return l.trim(); }).filter(function (l) { return l && !/^[-—─–_=]{3,}$/.test(l); });
@@ -1510,7 +1525,7 @@ function slipSummary(s) {
   let t = '✅ 已記錄（' + s.customer + '）　' + nowStr() + '\n';
   if (s.lossCount) t += '📉 損耗：扣除合計 ' + s.lossTotal + ' 件（' + s.lossCount + ' 筆）\n';
   if (s.changeCount) t += '📝 改價：' + s.changeCount + ' 筆\n';
-  return t.trim();
+  return outClean(t.trim());
 }
 
 /* ========================== 【冰庫顯示 / 取消（精簡＋台子時序）】 ========================== */
@@ -1542,7 +1557,7 @@ function freezerOverview(filterCustomer) {
       out += '\n' + pn + '：' + o.bal + (pack ? '（' + pack + '）' : '');
     });
   });
-  return out;
+  return outClean(out);   // 顯示層去貨主名（冰庫寄存表無獨立貨主欄，貨主若混在品名須遮）
 }
 function handleFreezerCancel(text) {
   const lines = String(text).split('\n').map(function (l) { return l.trim(); });
@@ -1620,7 +1635,7 @@ function handleFreezerCancel(text) {
     summary.push('改容器：' + o.c + ' ' + base + ' → ' + it.newPack + '（' + bal + '）');
   });
   if (rows.length) sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 6).setValues(rows);
-  return { count: rows.length, reply: rows.length ? '🧊 冰庫已更新（' + rows.length + ' 筆）：\n' + summary.join('\n') : '' };
+  return { count: rows.length, reply: rows.length ? outClean('🧊 冰庫已更新（' + rows.length + ' 筆）：\n' + summary.join('\n')) : '' };
 }
 /* ---- 查某客戶+品名目前冰庫餘額（台子防呆用：有庫存代表台子已於寄冰時記過）---- */
 function freezerBalanceOf(customer, product) {
@@ -1701,7 +1716,7 @@ function handleFreezerCmd(text) {
     });
     if (rows.length) sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 6).setValues(rows);
   } finally { lock.releaseLock(); }
-  return { count: summary.length, reply: '🧊 冰庫已更新：\n' + summary.join('\n') };
+  return { count: summary.length, reply: outClean('🧊 冰庫已更新：\n' + summary.join('\n')) };
 }
 
 /* ========================== 【鐵架/台子 未收回】 ========================== */
@@ -1846,7 +1861,7 @@ function todayLog(sheetName) {
   if (rows.length === 0) return title + '：今天還沒有任何記錄。';
   let out = title + '（共 ' + rows.length + ' 筆）：\n' + rows.slice(-40).join('\n');
   if (out.length > 4500) out = out.slice(0, 4500) + '\n…(太多了，只顯示一部分)';
-  return out;
+  return outClean(out);   // 今日冰庫/鐵架記錄含品名，去貨主名
 }
 function queryPriceChanges(filterCustomer) {
   const data = getSheet(SHEET_FINANCE).getDataRange().getValues();
@@ -1858,7 +1873,7 @@ function queryPriceChanges(filterCustomer) {
     if (rows.length >= 20) break;
   }
   if (rows.length === 0) return '📝 沒有找到' + (filterCustomer ? '「' + filterCustomer + '」的' : '') + '改價紀錄。';
-  return '📝 改價紀錄' + (filterCustomer ? '（' + filterCustomer + '）' : '（最近 ' + rows.length + ' 筆）') + '：\n' + rows.join('\n');
+  return outClean('📝 改價紀錄' + (filterCustomer ? '（' + filterCustomer + '）' : '（最近 ' + rows.length + ' 筆）') + '：\n' + rows.join('\n'));
 }
 function lossQuery(arg) {
   arg = String(arg).trim();
@@ -1884,7 +1899,7 @@ function lossQuery(arg) {
   if (rows.length === 0) return '📉 沒有找到' + (cust ? '「' + cust + '」' : '') + (rangeLabel ? '（' + rangeLabel + '）' : '') + '的損耗紀錄。';
   let out = '📉 損耗紀錄' + (cust ? '・' + cust : '') + (rangeLabel ? '（' + rangeLabel + '）' : '') + '：\n';
   out += rows.slice(-50).join('\n') + '\n――――――\n共 ' + rows.length + ' 筆，扣除合計：' + sum + ' 件';
-  return out;
+  return outClean(out);
 }
 function fmtTime(v) {
   if (v instanceof Date) return Utilities.formatDate(v, 'Asia/Taipei', 'MM/dd HH:mm');
@@ -2186,7 +2201,7 @@ function handleReturn(text) {
   if (!rows.length) return { count: 0, reply: '' };
   sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 5).setValues(rows);
   const ds = when.match(/(\d{4})\/(\d{1,2})\/(\d{1,2})/); const dstr = ds ? (ds[2] + '/' + ds[3]) : '';
-  return { count: rows.length, reply: '↩️ 已記錄退貨' + (dstr ? '（' + dstr + '）' : '') + '：\n' + summary.join('\n') };
+  return { count: rows.length, reply: outClean('↩️ 已記錄退貨' + (dstr ? '（' + dstr + '）' : '') + '：\n' + summary.join('\n')) };
 }
 function returnQuery(name) {
   const data = getSheet(SHEET_RETURN).getDataRange().getValues();
@@ -2199,7 +2214,7 @@ function returnQuery(name) {
   if (!rows.length) return name ? ('查無「' + name + '」的退貨記錄。') : '目前沒有退貨記錄。';
   let out = '↩️ 退貨記錄' + (name ? '（' + name + '）' : '') + '（' + rows.length + ' 筆）：\n' + rows.join('\n');
   if (out.length > 4800) out = out.slice(0, 4800) + '\n…（太多，請用「查X退貨」查單一客戶）';
-  return out;
+  return outClean(out);
 }
 function parkingImport(text) {
   const lines = String(text).split('\n').map(function (l) { return l.trim(); }).filter(Boolean);
@@ -2455,7 +2470,7 @@ function searchToday(rawKeyword) {
   let out = '🔍 今天含「' + keyword + '」的單（' + matched.length + ' 張）：\n\n' + matched.join('\n──────\n');
   if (hit > 0) out += '\n\n📊 「' + keyword + '」合計：' + totalStr + '（' + hit + ' 筆明細）';
   if (out.length > 4500) out = out.slice(0, 4500) + '\n…(內容過多，已截斷)';
-  return out;
+  return outClean(out);   // 回貼原文整段，去貨主名
 }
 function countPieces(keyword) {
   keyword = String(keyword).replace(/\s*(總件數|件數)\s*$/, '').trim();
@@ -2650,7 +2665,7 @@ function handleFreezerIceBatch(text) {
   const rows2 = results.map(function (r) { return '・' + r.product + '　入庫 ' + r.qty + ' → 剩 ' + r.bal; });
   let reply = '❄️ 冰庫入庫（' + customer + '，' + results.length + ' 筆）：\n' + rows2.join('\n');
   if (tzTotal > 0) reply += '\n🥡 同時記台子出庫 ' + tzTotal + ' 個（' + customer + '，查台子看得到）';
-  return { count: results.length, reply: reply };
+  return { count: results.length, reply: outClean(reply) };
 }
 function handleFreezerBatch(text) {
   const lines = String(text).split('\n')
@@ -2708,7 +2723,7 @@ function handleFreezerBatch(text) {
   const lst = results.map(function (r) { return '・' + r.customer + ' ' + (r.product || '') + ' ' + (r.isIn ? '入庫' : '出庫') + ' ' + r.qty + ' → 剩 ' + r.bal + (r.warn ? ' ⚠️' : ''); });
   let reply = '❄️ 冰庫登記（' + results.length + ' 筆）：\n' + lst.join('\n');
   if (results.some(function (r) { return r.warn; })) reply += '\n⚠️ 有品項庫存不足、已記為 0。請確認客戶/品名是否一致、或是否漏打入庫。';
-  return { count: results.length, reply: reply };
+  return { count: results.length, reply: outClean(reply) };
 }
 function handleFreezerShip(text) {
   const lines = String(text).split('\n')
@@ -2776,7 +2791,7 @@ function handleFreezerShip(text) {
     else reply += '\n・' + r.customer + ' ' + r.product + ' 已是 ' + r.bal + '（沒有重複扣）';
   });
   notFound.forEach(function (it) { reply += '\n・' + it.customer + ' ' + it.product + ' ⚠️找不到這筆（品名要跟查冰庫一致）'; });
-  return { count: items.length, reply: reply };
+  return { count: items.length, reply: outClean(reply) };
 }
 function setFreezer(customer, product, amount) {
   const lock = acquireLock(5000);
@@ -2824,7 +2839,7 @@ function handleFreezerEdit(text) {
   });
   const sheet = getSheet(SHEET_FREEZER);
   sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 6).setValues(rows);
-  return { count: rows.length, reply: '🧊 已修改冰庫庫存（' + rows.length + ' 筆）：\n' + summary.join('\n') };
+  return { count: rows.length, reply: outClean('🧊 已修改冰庫庫存（' + rows.length + ' 筆）：\n' + summary.join('\n')) };
 }
 
 /* ========================== 【鐵架 / 台子 寫入】 ========================== */

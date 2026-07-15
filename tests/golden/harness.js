@@ -96,6 +96,13 @@ const EXPORT_NAMES = [
   'codedOutstandingFor',
   'stripVendors',
   'shippingCleanSummary',
+  // ---- v3.4.3：顯示層去貨主名（所有品名輸出模板紅燈防迴歸；冰庫總量 formatStockGrouped 豁免）----
+  'outClean',
+  'shippingPull',
+  'freezerOverview',
+  'returnQuery',
+  'formatStockGrouped',
+  'stockLatest',
   // ---- v3.4 收款流程 / #備註 ----
   'receivableAssignByCustomer',
   'receivableStatusByCustomer',
