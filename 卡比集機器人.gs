@@ -23,7 +23,7 @@ const SHEET_RECEIVABLE = '待收款';   // Task4 收款/未收款（含軟刪除
 const SHEET_FAIL     = '輸入失敗紀錄';   // v3.3 輸入失敗追蹤
 // 版本識別：交付部署前務必更新 BOT_VERSION / BOT_BUILD(最後 commit 短hash) / BOT_DATE（見 DECISIONS 開發紀律）
 var BOT_VERSION = 'v3.4.3';
-var BOT_BUILD = 'fbee1c7';
+var BOT_BUILD = '82250eb';
 var BOT_DATE = '2026/07/15';
 function versionMessage() {
   return '📦 卡比集機器人 ' + BOT_VERSION + ' (' + BOT_BUILD + ') ' + BOT_DATE + '\n本輪重點修復：\n' +
