@@ -31,10 +31,21 @@ function failRows(env) { return env.sheets[FAIL] ? env.sheets[FAIL].__rows.slice
   check('①4 有輸入者欄', r[0] && !!r[0][2], JSON.stringify(r[0]));
 })();
 (function () {
+  // v3.4.2：不含「鐵架」二字的「名稱*數字」多行 → 裝死無視（哲學：明確關鍵字才動作，格式相似不足以觸發）；不再誤判鐵架格式、不留檔、零寫入
+  const RACK = '鐵架庫存';
+  ['陳記\n收\n蘋果箱*2', '陳記\n收\n旭陽鐵*2'].forEach(function (t, i) {
+    const e = mkEnv();
+    const rep = send(e, t);
+    const fr = failRows(e);
+    check('①5.' + (i + 1) + ' 無「鐵架」二字「' + t.replace(/\n/g, '⏎') + '」→ 裝死(無回應/零留檔/零寫入)',
+      rep === '' && !fr.some(function (x) { return x[1] === '鐵架格式'; }) && (!e.sheets[RACK] || e.sheets[RACK].__rows.length <= 1),
+      'rep=' + JSON.stringify(rep) + ' fail=' + JSON.stringify(fr));
+  });
+  // 保留 v3.3「格式警示→留檔」覆蓋：含「鐵架」二字但夾雜壞品名 → 仍跳格式警示並寫入輸入失敗紀錄
   const env = mkEnv();
-  send(env, '陳記\n收\n蘋果箱*2');   // 鐵架名稱不含「鐵」→ rackSlipStrict/Guard 格式警示
+  send(env, '陳記\n收\n旭陽鐵架*2\n蘋果*3');
   const r = failRows(env);
-  check('①5 鐵架格式警示 → 寫入', r.length >= 1 && r.some(function (x) { return x[1] === '鐵架格式'; }), JSON.stringify(r));
+  check('①5.3 含鐵架夾雜壞品名 → 鐵架格式警示留檔', r.some(function (x) { return x[1] === '鐵架格式'; }), JSON.stringify(r));
 })();
 (function () {
   const env = mkEnv();

@@ -73,10 +73,11 @@ function rows(env, s) { return env.sheets[s] ? env.sheets[s].__rows.slice(1) : [
   check('③2 括號備註仍保留', rows(env2, SHIP)[0][9] === '修清', JSON.stringify(rows(env2, SHIP)[0]));
   // 純閒聊 → 無反應、無寫入（真實舊版誤攔案例，新版必須裝死）
   const RACK = '鐵架庫存';
-  ['可以連鐵架一起需紀錄', '碼頭 美婷要一件田228 1*1200'].forEach(function (t, i) {
+  // 第三例（v3.4.2）：員工多行交易記錄「客戶/品名 + 名稱*數字 + 單價/總價 + 已收X元」，無「鐵架」二字 → 不得被鐵架格式誤攔，一律裝死
+  ['可以連鐵架一起需紀錄', '碼頭 美婷要一件田228 1*1200', '2859/黑網\n進口山東 *5\n450/2250元\n已收2250元'].forEach(function (t, i) {
     const e = mkEnv();
     const r = send(e, t);
-    check('③3.' + (i + 1) + ' 閒聊「' + t + '」→ 裝死(無回應、零寫入)', r === '' && rows(e, SHIP).length === 0 && rows(e, RACK).length === 0, JSON.stringify(r) + ' 鐵架=' + rows(e, RACK).length);
+    check('③3.' + (i + 1) + ' 閒聊/交易人話「' + t.replace(/\n/g, '⏎') + '」→ 裝死(無回應、零寫入)', r === '' && rows(e, SHIP).length === 0 && rows(e, RACK).length === 0, JSON.stringify(r) + ' 鐵架=' + rows(e, RACK).length);
   });
 })();
 

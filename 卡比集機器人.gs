@@ -22,9 +22,9 @@ const SHEET_DUTY     = '外勤補貼';
 const SHEET_RECEIVABLE = '待收款';   // Task4 收款/未收款（含軟刪除稽核）
 const SHEET_FAIL     = '輸入失敗紀錄';   // v3.3 輸入失敗追蹤
 // 版本識別：交付部署前務必更新 BOT_VERSION / BOT_BUILD(最後 commit 短hash) / BOT_DATE（見 DECISIONS 開發紀律）
-var BOT_VERSION = 'v3.4.1';
+var BOT_VERSION = 'v3.4.2';
 var BOT_BUILD = '881e268';
-var BOT_DATE = '2026/07/14';
+var BOT_DATE = '2026/07/15';
 function versionMessage() {
   return '📦 卡比集機器人 ' + BOT_VERSION + ' (' + BOT_BUILD + ') ' + BOT_DATE + '\n本輪重點修復：\n' +
     '【意圖判斷層】收台≠收款、聊天/填充詞不建寄運、引用(Line Quote)訊息唯讀\n' +
@@ -47,6 +47,7 @@ function versionMessage() {
     '【v3.4 去貨主名】已登記貨主在標題/明細/備註全位置去乾淨(未登記請 #新增貨主)；【#備註】#開頭非指令→掛今日最近一筆寄運/收款備註，無#閒聊一律無視不誤存\n' +
     '【v3.4 收款流程】#6986收款 名字／回覆待收款訊息綁定收款人／#6986 查單／#未收 巡帳／#已收 6986 完款；同客戶多張會列單號讓你選\n' +
     '【v3.4.1 修】鐵架單行出庫需含「鐵」才判定，避免「碼頭 美婷要一件田228 1*1200」這類人話被誤攔\n' +
+    '【v3.4.2 修】鐵架全路徑(單行/多行/首行動詞/前置閘)一律要含「鐵架」二字才觸發，「進口山東 *5」等多行交易人話不再被誤攔；哲學：明確關鍵字才動作，格式相似不足以觸發\n' +
     '你看到這行＝最新程式已生效（對照上方版本＋hash 即可確認是否新版）。';
 }
 const FONT_SIZE = 18;
@@ -774,12 +775,12 @@ function handleEvent(event) {
     if (rr.count > 0) { replyToLine(replyToken, rr.reply); return; }
   }
 
-  if (/^(出去|出貨|出|回收|收)/.test(text.split('\n')[0].trim())) {
+  if (/^(出去|出貨|出|回收|收)/.test(text.split('\n')[0].trim()) && /鐵架/.test(text)) {   // v3.4.2：首行動詞＋需含「鐵架」二字才進批次鐵架，裸動詞不觸發
     const rb = handleRackBatch(text);
     if (rb.count > 0) { replyToLine(replyToken, rb.reply); return; }
   }
 
-  if (/[*＊×xX]\s*\d+/.test(text) && !/【/.test(text) && /鐵/.test(text)) {   // 需含「鐵」才當鐵架出庫，避免「碼頭 美婷要一件田228 1*1200」這類人話被誤攔
+  if (/[*＊×xX]\s*\d+/.test(text) && !/【/.test(text) && /鐵架/.test(text)) {   // 需含「鐵架」二字才當鐵架出庫，避免「碼頭…1*1200」「進口山東 *5」這類人話被誤攔（v3.4.2：由單字「鐵」收緊為「鐵架」）
     const ri = handleRackInlineOut(text);
     if (ri.count > 0) { replyToLine(replyToken, ri.reply); return; }
   }
@@ -3051,7 +3052,7 @@ function rackEntryGuard(text) {
   if (/(匯款|轉帳|改價|損耗|扣除|上班|下班|遲到|請假|入庫|出庫|寄運|寄冰|外勤|借\s*\d|還\s*\d)/.test(t)) return null;
   if (/鐵架未收回|在外面共|台子未收回|目前沒有/.test(t)) return null;   // 查詢/輸出貼回
   if (/^(查|搜|統|拉)/.test(t.trim())) return null;
-  if (!/鐵/.test(t)) return null;   // 完全不含「鐵」→ 非鐵架訊息(冰庫/品項內容等不誤判) — P0
+  if (!/鐵架/.test(t)) return null;   // 完全不含「鐵架」二字→ 非鐵架訊息(冰庫/品項/交易人話等不誤判) — P0（v3.4.2：由單字「鐵」收緊為「鐵架」）
   const lines = t.split('\n').map(function (l) { return l.trim(); }).filter(Boolean);
   if (!lines.length) return null;
   const itemRe = /^(.+?)\s*(?:[*＊×xX:：]\s*|\s+)\d+\s*(?:收\s*\d*|取消|修改\s*\S*)?\s*$/;
@@ -3095,6 +3096,7 @@ function rackFormatWarning(badLines) {
 function rackSlipStrict(text) {
   const rawLines = String(text).split('\n').map(function (l) { return l.trim(); }).filter(Boolean);
   if (rawLines.length < 2) return { handled: false };
+  if (!/鐵架/.test(text)) return { handled: false };   // v3.4.2：必須實際含「鐵架」二字才進鐵架解析，單純「名稱*數字」多行交易(如「進口山東 *5」)不再誤攔 — 寧漏勿誤
   if (/\d+\s*(?:件|包|箱)/.test(text)) return { handled: false };
   if (/[（(]\s*(?:冰|台子|鐵架)\s*[)）]/.test(text)) return { handled: false };
   if (/【/.test(text)) return { handled: false };
