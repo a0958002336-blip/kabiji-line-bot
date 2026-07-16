@@ -26,7 +26,7 @@ const SHEET_METER_LOG = '電費紀錄';       // v3.4.5 電錶月結：不可變
 var ACCOUNT_METER = '營業支出-電費';       // ERP 日記帳預留會計科目
 // 版本識別：交付部署前務必更新 BOT_VERSION / BOT_BUILD(最後 commit 短hash) / BOT_DATE（見 DECISIONS 開發紀律）
 var BOT_VERSION = 'v3.4.5';
-var BOT_BUILD = '207d277';
+var BOT_BUILD = '95fde8a';
 var BOT_DATE = '2026/07/16';
 function versionMessage() {
   return '📦 卡比集機器人 ' + BOT_VERSION + ' (' + BOT_BUILD + ') ' + BOT_DATE + '\n本輪重點修復：\n' +
