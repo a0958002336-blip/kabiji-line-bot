@@ -40,23 +40,23 @@ function rows(env, s) { return env.sheets[s] ? env.sheets[s].__rows.slice(1) : [
   check('①5 stripVendors 涵蓋明細+備註', /高山228/.test(scs) && !/葉瑋宸/.test(scs), scs);
 })();
 
-/* ========== ② Bug2 #備註 ========== */
+/* ========== ② Bug2 #備註（v3.4.5：改為明確「#備註 內容」格式；裸#不再兜底）========== */
 (function () {
   const env = mkEnv();
   send(env, '6986\n高山228 特 100件 寄旭陽');
-  const r = send(env, '#可以連鐵架一起需紀錄');
-  check('②1 #備註 → 掛最近寄運，回確認', /已把備註掛到今日最近一筆/.test(r) && /可以連鐵架一起需紀錄/.test(r), r);
+  const r = send(env, '#備註 可以連鐵架一起需紀錄');
+  check('②1 #備註 內容 → 掛最近寄運，回確認', /已把備註掛到今日最近一筆/.test(r) && /可以連鐵架一起需紀錄/.test(r), r);
   check('②2 #備註 → 寫入寄運備註欄', rows(env, SHIP)[0][9] === '可以連鐵架一起需紀錄', JSON.stringify(rows(env, SHIP)[0]));
 })();
 (function () {
   const env = mkEnv();
-  const r = send(env, '#隨便記一下');
+  const r = send(env, '#備註 隨便記一下');
   check('②3 今日無資料 → 友善提示', /今日尚無可掛備註/.test(r), r);
 })();
 (function () {
   const env = mkEnv();
   send(env, '6986 老人田 高山228 要收款 6800');   // 收款較新
-  const r = send(env, '#這筆現金');
+  const r = send(env, '#備註 這筆現金');
   check('②4 #備註 可掛到收款', /已把備註掛到今日最近一筆（收款/.test(r), r);
   check('②5 收款備註欄寫入', rows(env, RECV)[0][6] === '這筆現金', JSON.stringify(rows(env, RECV)[0]));
 })();

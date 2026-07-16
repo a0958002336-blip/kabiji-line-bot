@@ -21,8 +21,11 @@ const SHEET_TARE     = '空車重量';
 const SHEET_DUTY     = '外勤補貼';
 const SHEET_RECEIVABLE = '待收款';   // Task4 收款/未收款（含軟刪除稽核）
 const SHEET_FAIL     = '輸入失敗紀錄';   // v3.3 輸入失敗追蹤
+const SHEET_METER    = '電錶設定';        // v3.4.5 電錶月結：可變狀態(倍率/電價/目前讀數/上次抄錶)
+const SHEET_METER_LOG = '電費紀錄';       // v3.4.5 電錶月結：不可變帳(每期快照，ERP 日記帳預留)
+var ACCOUNT_METER = '營業支出-電費';       // ERP 日記帳預留會計科目
 // 版本識別：交付部署前務必更新 BOT_VERSION / BOT_BUILD(最後 commit 短hash) / BOT_DATE（見 DECISIONS 開發紀律）
-var BOT_VERSION = 'v3.4.4';
+var BOT_VERSION = 'v3.4.5';
 var BOT_BUILD = '207d277';
 var BOT_DATE = '2026/07/16';
 function versionMessage() {
@@ -50,6 +53,7 @@ function versionMessage() {
     '【v3.4.2 修】鐵架全路徑(單行/多行/首行動詞/前置閘)一律要含「鐵架」二字才觸發，「進口山東 *5」等多行交易人話不再被誤攔；哲學：明確關鍵字才動作，格式相似不足以觸發\n' +
     '【v3.4.3 修】去貨主名補顯示層防線：寄運彙總/查詢、冰庫寄存/退貨/改價/損耗等所有品名輸出一律再過濾一次，貨主登記前存的舊髒列查詢時也不外洩貨主名(不回溯改資料)；冰庫總量按貨主分組為刻意設計故豁免\n' +
     '【v3.4.4 修】寄運解析：等級支援含括號完整名(特(修清))、單件重量(18K/20K)解析並顯示於彙總；業務規則收緊＝只記錄旭陽寄運，其他車行(寄車9916)整筆不記(裝死)、非旭陽括號原文原樣留備註不拆解；老闆 #非旭陽寄運 可列既有誤存待清\n' +
+    '【v3.4.5 新】電錶月結：#新增電錶/#抄錶(自動回算式並記帳)/#電錶/#電費紀錄/#電錶設定/#停用+啟用電錶/#電錶提醒；每月1號08:00提醒、每日20:00追未抄(需 GAS 跑一次 setupMeterTriggers)。#備註防呆：只有「#備註 內容」才掛備註，其他 #開頭非指令一律回「無此指令」不再誤掛\n' +
     '你看到這行＝最新程式已生效（對照上方版本＋hash 即可確認是否新版）。';
 }
 const FONT_SIZE = 18;
@@ -126,6 +130,15 @@ function handleEvent(event) {
   if (text === '#鐵架轉代號') { if (!ownerGate(source, replyToken)) return; const lg = migrateRackCodes(); replyToLine(replyToken, lg.length ? ('✅ 已為未收回鐵架配發代號 ' + lg.length + ' 筆：\n' + lg.join('\n') + '\n（之後收回請打代號，例：a*2收回）') : '目前沒有需要轉代號的未收回鐵架。'); return; }
   if (text === '#台子異常掃描') { if (!ownerGate(source, replyToken)) return; replyToLine(replyToken, scanTaiziAnomalies()); return; }
   if (text === '#非旭陽寄運') { if (!ownerGate(source, replyToken)) return; replyToLine(replyToken, outClean(nonMainShipping())); return; }
+  // ===== 電錶月結（v3.4.5）：設定類限老闆；#抄錶 開放群內成員(須可寫入群)；查詢類開放 =====
+  if (/^#新增電錶/.test(text)) { if (!ownerGate(source, replyToken)) return; replyToLine(replyToken, handleAddMeter(text)); return; }
+  if (/^#電錶設定/.test(text)) { if (!ownerGate(source, replyToken)) return; replyToLine(replyToken, handleMeterSetting(text)); return; }
+  if (/^#停用電錶/.test(text)) { if (!ownerGate(source, replyToken)) return; const n = text.replace(/^#停用電錶/, '').trim(); replyToLine(replyToken, n ? handleDisableMeter(n) : '⚠️ 用法：#停用電錶 錶名'); return; }
+  if (/^#啟用電錶/.test(text)) { if (!ownerGate(source, replyToken)) return; const n = text.replace(/^#啟用電錶/, '').trim(); replyToLine(replyToken, n ? handleEnableMeter(n) : '⚠️ 用法：#啟用電錶 錶名'); return; }
+  if (/^#電錶提醒/.test(text)) { replyToLine(replyToken, meterReminderStatus()); return; }
+  if (/^#抄錶/.test(text)) { if (!getPerm(chatId).canWrite) { replyToLine(replyToken, '🔒 此群組唯讀，無法抄錶。'); return; } replyToLine(replyToken, handleMeterReading(text, source && source.userId)); return; }
+  if (/^#電費紀錄/.test(text)) { const b = text.replace(/^#電費紀錄/, '').trim(); const nm = (b.match(/^(\S+)/) || [])[1]; replyToLine(replyToken, nm ? handleMeterHistory(nm, b.slice(nm.length)) : '⚠️ 用法：#電費紀錄 錶名'); return; }
+  if (/^#電錶\s+\S/.test(text)) { const nm = text.replace(/^#電錶/, '').trim().split(/\s+/)[0]; replyToLine(replyToken, handleMeterStatus(nm)); return; }
   if (text === '#設定工作群組') { if (!ownerGate(source, replyToken)) return; addWorkGroup(chatId); replyToLine(replyToken, '✅ 已把「這個群組」設為工作群組。\n目前工作群組數：' + getWorkGroups().length); return; }
   if (text === '#取消工作群組') { if (!ownerGate(source, replyToken)) return; removeWorkGroup(chatId); replyToLine(replyToken, '已把這個群組移出工作群組。\n目前工作群組數：' + getWorkGroups().length); return; }
   // ★ 群組權限設定（老闆限定）
@@ -805,8 +818,19 @@ function handleEvent(event) {
       return;
   } }
 
-  /* ---- #備註：# 開頭但非任何已知指令 → 掛到「今日最近一筆」寄運或收款的備註（規則見 DECISIONS D-NOTE）---- */
-  if (/^#\S/.test(text)) { replyToLine(replyToken, appendRecentNote(text.replace(/^#\s*/, '').trim())); return; }
+  /* ---- #備註 防呆(v3.4.5)：只有明確「#備註 內容」才掛備註；其他 #開頭 一律視為「像指令但不存在」明確報錯，
+   *      不再靜默兜底成備註（避免 #新增電錶 這類舊版沒有／打錯字的指令被誤掛到寄運/收款備註）---- */
+  if (/^#備註/.test(text)) {
+    const _note = text.replace(/^#備註\s*/, '').trim();
+    if (!_note) { replyToLine(replyToken, '📝 用法：#備註 內容\n（掛到今天最近一筆寄運或收款；例：#備註 客戶要求下午到）'); return; }
+    replyToLine(replyToken, appendRecentNote(_note));
+    return;
+  }
+  if (/^#\S/.test(text)) {
+    const _cmd = (text.match(/^#\S+/) || ['#'])[0];
+    replyToLine(replyToken, '⚠️ 無此指令：' + _cmd + '\n・現有指令請打「#指令表」查詢\n・若要寫備註請用「#備註 內容」開頭');
+    return;
+  }
 }
 
 // #備註：把文字掛到「本日最近一筆」寄運或收款的備註欄（限當日；兩者取時間較新者）。
@@ -823,6 +847,144 @@ function appendRecentNote(note) {
   const cur = String(best.arr[best.noteCol - 1] || '');
   best.sheet.getRange(best.row, best.noteCol).setValue(cur ? (cur + ' ' + note) : note);
   return outClean('📝 已把備註掛到今日最近一筆（' + best.label + '）：\n『' + note + '』');   // label 含品名/客戶，去貨主名
+}
+
+/* ========================== 【電錶月結記錄 v3.4.5】 ==========================
+ * 分租電表每月抄錶算電費付出租方。兩張表：
+ *   電錶設定(可變狀態) / 電費紀錄(不可變帳，每期快照，ERP 日記帳預留)。
+ * 指令：#新增電錶 / #抄錶 / #電錶 / #電費紀錄 / #電錶設定 / #停用電錶 / #啟用電錶 / #電錶提醒。
+ * 排程：每月1號 08:00 早報待抄；每日 20:00 追未抄(到抄完為止)。時區 Asia/Taipei。
+ * 規則(董事長裁示)：期間＝上次抄錶日~本次抄錶日(首期＝建錶日~首抄)；金額 Math.round 收整數元(顯示原始與收尾)；
+ *   讀數≤上期/同日重複 需加「確認」；金額較上期>3倍提示；冰庫總量豁免不相關。
+ */
+function todayYmd() { return Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy/MM/dd'); }
+function fmtMoney(n) { const v = Math.round(Number(n) || 0); const neg = v < 0; return (neg ? '-' : '') + String(Math.abs(v)).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+function meterYm(s) { const m = String(s).match(/(\d{4})\/(\d{1,2})/); return m ? (m[1] + '/' + parseInt(m[2], 10)) : ''; }
+function isMeterPendingThisMonth(last, todayYmdStr) { if (!last) return true; return meterYm(last) !== meterYm(todayYmdStr); }
+function meterCompute(prev, cur, rate, price) {
+  const face = (Number(cur) || 0) - (Number(prev) || 0);   // 錶面度數
+  const real = face * (Number(rate) || 0);                 // 實際度數
+  const raw = real * (Number(price) || 0);                 // 應付(原始)
+  return { face: face, real: real, raw: raw, amount: Math.round(raw) };
+}
+function meterAnomaly(amount, lastAmount) { const la = Number(lastAmount); if (!la || la <= 0) return false; return amount > la * 3 || amount * 3 < la; }
+function findMeter(name) {
+  const sheet = getSheet(SHEET_METER); const d = sheet.getDataRange().getValues(); const key = norm(name);
+  for (let i = 1; i < d.length; i++) { if (norm(String(d[i][0])) === key) return { sheet: sheet, sheetRow: i + 1, row: d[i] }; }
+  return null;
+}
+function activeMeters() { const d = getSheet(SHEET_METER).getDataRange().getValues(); const out = []; for (let i = 1; i < d.length; i++) { if (d[i][0] && String(d[i][8]) !== '停用') out.push(d[i]); } return out; }
+
+function handleAddMeter(text) {
+  const body = String(text).replace(/^#新增電錶/, '').trim();
+  const nameM = body.match(/^(\S+)/); if (!nameM) return '⚠️ 用法：#新增電錶 錶名 倍率30 電價5 起始829 [出租方X]';
+  const name = nameM[1];
+  const rateM = body.match(/倍率\s*([\d.]+)/), priceM = body.match(/電價\s*([\d.]+)/), startM = body.match(/(?:起始|讀數)\s*([\d.]+)/), lessorM = body.match(/出租方\s*(\S+)/);
+  if (!rateM || !priceM || !startM) return '⚠️ 需含 倍率／電價／起始，例：#新增電錶 子緯x旭陽 倍率30 電價5 起始829';
+  if (findMeter(name)) return '⚠️ 電錶「' + name + '」已存在。改設定請用 #電錶設定 ' + name + ' 電價X／倍率X。';
+  getSheet(SHEET_METER).appendRow([name, lessorM ? lessorM[1] : '', Number(rateM[1]), Number(priceM[1]), Number(startM[1]), todayYmd(), '', '', '啟用']);
+  return '✅ 已新增電錶：' + name + '\n・倍率 ' + Number(rateM[1]) + '　電價 ' + Number(priceM[1]) + ' 元/度\n・起始讀數 ' + Number(startM[1]) + (lessorM ? ('\n・出租方 ' + lessorM[1]) : '') + '\n每月1號會提醒抄錶，抄錶打：#抄錶 ' + name + ' 本期讀數';
+}
+function handleMeterReading(text, reporter) {
+  const parts = String(text).replace(/^#抄錶/, '').trim().split(/\s+/).filter(Boolean);
+  let confirm = false;
+  if (parts.length && /^(確認|確定)$/.test(parts[parts.length - 1])) { confirm = true; parts.pop(); }
+  if (parts.length < 2) return '⚠️ 用法：#抄錶 錶名 本期讀數（例：#抄錶 子緯x旭陽 1173）';
+  const reading = Number(parts[parts.length - 1]);
+  const name = parts.slice(0, parts.length - 1).join(' ');
+  if (!isFinite(reading)) return '⚠️ 讀數要是數字。用法：#抄錶 錶名 本期讀數';
+  const meter = findMeter(name);
+  if (!meter) return '⚠️ 找不到電錶「' + name + '」。先 #新增電錶 建立，或打 #電錶提醒 看清單。';
+  if (String(meter.row[8]) === '停用') return '⚠️ 電錶「' + name + '」已停用。要恢復抄錶請先打 #啟用電錶 ' + name + '。';
+  const today = todayYmd();
+  const prev = Number(meter.row[4]) || 0, rate = Number(meter.row[2]) || 0, price = Number(meter.row[3]) || 0;
+  const lastDate = String(meter.row[6] || '');
+  if (!confirm && lastDate === today) return '📌 電錶「' + name + '」今天已抄過（讀數 ' + meter.row[4] + '，金額 ' + fmtMoney(meter.row[7]) + ' 元）。如需覆蓋修正，請在末尾加「確認」。';
+  if (!confirm && reading <= prev) return '⚠️ 本期讀數 ' + reading + ' ≤ 上期 ' + prev + '，可能錶歸零或打錯。\n確認無誤請打：#抄錶 ' + name + ' ' + reading + ' 確認';
+  const c = meterCompute(prev, reading, rate, price);
+  const periodStart = lastDate || String(meter.row[5] || today);
+  const log = getSheet(SHEET_METER_LOG);
+  log.appendRow([nowStr(), name, meter.row[1] || '', periodStart, today, prev, reading, c.face, rate, c.real, price, c.amount, reporter || '', ACCOUNT_METER, '', '']);
+  meter.sheet.getRange(meter.sheetRow, 5).setValue(reading);   // 目前讀數
+  meter.sheet.getRange(meter.sheetRow, 7).setValue(today);     // 上次抄錶日
+  meter.sheet.getRange(meter.sheetRow, 8).setValue(c.amount);  // 上次金額
+  const moneyPart = (c.raw === c.amount) ? (fmtMoney(c.amount) + '元') : (c.raw + '→' + fmtMoney(c.amount) + '元(四捨五入)');
+  let reply = '🔌 ' + name + ' ' + mdOf(periodStart) + '~' + mdOf(today) + '：' + reading + '−' + prev + '=' + c.face + '度(錶面)×' + rate + '=' + c.real + '度×' + price + '元=' + moneyPart;
+  if (meterAnomaly(c.amount, meter.row[7])) reply += '\n⚠️ 本期金額與上期(' + fmtMoney(meter.row[7]) + '元)差距逾3倍，請確認讀數是否正確。';
+  reply += '\n（已記錄，下期起始＝' + reading + '）';
+  return reply;
+}
+function handleMeterStatus(name) {
+  const m = findMeter(name); if (!m) return '⚠️ 找不到電錶「' + name + '」。';
+  const r = m.row;
+  return '🔌 電錶 ' + r[0] + (String(r[8]) === '停用' ? '（已停用）' : '') +
+    '\n・出租方：' + (r[1] || '(未設)') +
+    '\n・倍率：' + r[2] + '　電價：' + r[3] + ' 元/度' +
+    '\n・目前起始讀數：' + r[4] +
+    '\n・上次抄錶：' + (r[6] ? (mdOf(r[6]) + '　' + fmtMoney(r[7]) + ' 元') : '(尚未抄錶)') +
+    '\n・建錶日：' + mdOf(r[5]);
+}
+function handleMeterHistory(name, arg) {
+  const d = getSheet(SHEET_METER_LOG).getDataRange().getValues(); const key = norm(name);
+  const yearF = (String(arg || '').match(/\d{4}/) || [])[0];
+  const rows = []; let sum = 0;
+  for (let i = 1; i < d.length; i++) {
+    if (norm(String(d[i][1])) !== key) continue;
+    if (yearF && String(d[i][0]).indexOf(yearF) !== 0) continue;
+    rows.push('・' + mdOf(d[i][3]) + '~' + mdOf(d[i][4]) + '　' + d[i][9] + '度×' + d[i][10] + '元 = ' + fmtMoney(d[i][11]) + '元');
+    sum += Number(d[i][11]) || 0;
+  }
+  if (!rows.length) return '📋 電錶「' + name + '」' + (yearF ? ('（' + yearF + '）') : '') + '目前沒有電費紀錄。';
+  return '📋 ' + name + ' 電費紀錄' + (yearF ? ('（' + yearF + '）') : '') + '（' + rows.length + ' 期）：\n' + rows.join('\n') + '\n――――――\n合計：' + fmtMoney(sum) + ' 元';
+}
+function handleMeterSetting(text) {
+  const body = String(text).replace(/^#電錶設定/, '').trim();
+  const nameM = body.match(/^(\S+)/); if (!nameM) return '⚠️ 用法：#電錶設定 錶名 電價5.2（或 倍率30／出租方X）';
+  const name = nameM[1]; const m = findMeter(name); if (!m) return '⚠️ 找不到電錶「' + name + '」。';
+  const rest = body.slice(nameM[1].length); const changes = [];
+  const pM = rest.match(/電價\s*([\d.]+)/); if (pM) { m.sheet.getRange(m.sheetRow, 4).setValue(Number(pM[1])); changes.push('電價→' + Number(pM[1])); }
+  const rM = rest.match(/倍率\s*([\d.]+)/); if (rM) { m.sheet.getRange(m.sheetRow, 3).setValue(Number(rM[1])); changes.push('倍率→' + Number(rM[1])); }
+  const lM = rest.match(/出租方\s*(\S+)/); if (lM) { m.sheet.getRange(m.sheetRow, 2).setValue(lM[1]); changes.push('出租方→' + lM[1]); }
+  if (!changes.length) return '⚠️ 沒有可更新的項目。可改：電價X／倍率X／出租方X。';
+  return '✅ 已更新電錶「' + name + '」：' + changes.join('、') + '\n（只影響之後的計算，歷史紀錄不變）';
+}
+function handleDisableMeter(name) { const m = findMeter(name); if (!m) return '⚠️ 找不到電錶「' + name + '」。'; m.sheet.getRange(m.sheetRow, 9).setValue('停用'); return '✅ 已停用電錶「' + name + '」：保留歷史、停止每月提醒。恢復請打 #啟用電錶 ' + name + '。'; }
+function handleEnableMeter(name) { const m = findMeter(name); if (!m) return '⚠️ 找不到電錶「' + name + '」。'; m.sheet.getRange(m.sheetRow, 9).setValue('啟用'); return '✅ 已啟用電錶「' + name + '」，恢復每月提醒。'; }
+
+function pushToAdminGroups(text) {
+  const ids = listProp('ADMIN_GROUP_IDS');
+  ids.forEach(function (id) { UrlFetchApp.fetch('https://api.line.me/v2/bot/message/push', { method: 'post', contentType: 'application/json', headers: { Authorization: 'Bearer ' + CHANNEL_ACCESS_TOKEN }, payload: JSON.stringify({ to: id, messages: [{ type: 'text', text: text }] }), muteHttpExceptions: true }); });
+  return ids.length;
+}
+function meterMorningMessage() {
+  const ms = activeMeters(); if (!ms.length) return '';
+  return '📢 今日為當月1號，請記錄電錶度數以便對帳電費。\n待抄電錶：\n' + ms.map(function (r) { return '・' + r[0] + '（上期讀數 ' + r[4] + '）'; }).join('\n') + '\n\n抄錶請打：#抄錶 錶名 本期讀數';
+}
+function meterMorningReminder() { const today = todayYmd(); if (parseInt((today.match(/\/(\d{1,2})$/) || [])[1], 10) !== 1) return; const msg = meterMorningMessage(); if (msg) pushToAdminGroups(msg); }
+function meterPendingList(todayYmdStr) { return activeMeters().filter(function (r) { return isMeterPendingThisMonth(String(r[6] || ''), todayYmdStr); }); }
+function meterPendingMessage(todayYmdStr) {
+  const pend = meterPendingList(todayYmdStr); if (!pend.length) return '';
+  return '⏰ 以下電錶本月尚未抄錶，請盡快記錄：\n' + pend.map(function (r) { return '・' + r[0] + '（上期讀數 ' + r[4] + '）'; }).join('\n') + '\n\n抄錶請打：#抄錶 錶名 本期讀數';
+}
+function meterPendingReminder() { const msg = meterPendingMessage(todayYmd()); if (msg) pushToAdminGroups(msg); }
+function meterTriggerExists(fn) { return ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === fn; }); }
+function setupMeterTriggers() {
+  const created = [];
+  if (!meterTriggerExists('meterMorningReminder')) { ScriptApp.newTrigger('meterMorningReminder').timeBased().everyDays(1).atHour(8).nearMinute(0).create(); created.push('每日08:00 早報(僅每月1號發送)'); }
+  if (!meterTriggerExists('meterPendingReminder')) { ScriptApp.newTrigger('meterPendingReminder').timeBased().everyDays(1).atHour(20).nearMinute(0).create(); created.push('每日20:00 追未抄'); }
+  return created.length ? ('✅ 已建立電錶排程觸發器：\n' + created.join('\n')) : 'ℹ️ 電錶排程觸發器已存在，未重複建立。';
+}
+function meterReminderStatus() {
+  const today = todayYmd(); const ms = activeMeters(); const pend = meterPendingList(today);
+  const done = ms.filter(function (r) { return !isMeterPendingThisMonth(String(r[6] || ''), today); });
+  let out = '🔔 電錶提醒狀態\n';
+  out += '・早報觸發器(每月1號08:00)：' + (meterTriggerExists('meterMorningReminder') ? '✅ 已建立' : '❌ 未建立(請於 GAS 執行 setupMeterTriggers)') + '\n';
+  out += '・追抄觸發器(每日20:00)：' + (meterTriggerExists('meterPendingReminder') ? '✅ 已建立' : '❌ 未建立(請於 GAS 執行 setupMeterTriggers)') + '\n';
+  out += '・推送群組：' + (listProp('ADMIN_GROUP_IDS').length ? ('管理群 ' + listProp('ADMIN_GROUP_IDS').length + ' 個') : '❌ 尚未設定管理群(在群內打 #設為管理群組)') + '\n';
+  out += '――――――\n本月抄錶狀態（啟用電錶 ' + ms.length + ' 具）：\n';
+  out += '✅ 已抄：' + (done.length ? done.map(function (r) { return r[0]; }).join('、') : '(無)') + '\n';
+  out += '⏳ 未抄：' + (pend.length ? pend.map(function (r) { return r[0]; }).join('、') : '(全部完成 🎉)');
+  return out;
 }
 
 /* ========================== 【工作群組/權限/別名 等基礎】 ========================== */
@@ -2346,8 +2508,10 @@ function commandSheet() {
     '【改價/損耗/匯款】', '・客戶 改價 內容', '・客戶 匯款 金額', '・對帳單貼上（扣除N件/改NNN元）', '・查改價　查損耗', '',
     '【群組權限（限老闆）】', '・#群組ID', '・#設為管理群組（這群可寫入）', '・#設為市場群組（這群唯讀）', '・#群組權限', '',
     '【設定】', '・#版本　#設定客戶 名稱　#查客戶', '・#貨主名單／#新增貨主 X', '・#冰庫名單／#新增冰庫 X', '・#安靜／#取消安靜（僅本群組）', '・#全部安靜／#全部取消安靜（全部群組・限老闆）', '・#開啟日期戳／#關閉日期戳／#日期戳狀態（計價單回當日日期・限老闆）', '・查輸入失敗／今日輸入失敗／查輸入失敗 7/1-7/10（限老闆）', '',
-    '【清除（限老闆，要加「確定」）】', '・出勤 清除 確定／冰庫 清除 確定／台子 清除 確定／寄運資料 清除 確定', '・改價紀錄 清除 確定／損耗紀錄 清除 確定／冰庫總量 清除 確定', '',
-    '（打「指令表」隨時叫出這張）'
+    '【電錶月結】', '・#新增電錶 錶名 倍率30 電價5 起始829 [出租方X]（限老闆）', '・#抄錶 錶名 本期讀數（回算式並記錄；讀數異常或同日重抄需加「確認」）', '・#電錶 錶名（查狀態）／#電費紀錄 錶名（查歷史）', '・#電錶設定 錶名 電價5.2／倍率30／出租方X（限老闆，只影響之後）', '・#停用電錶 錶名／#啟用電錶 錶名（限老闆）', '・#電錶提醒（查提醒設定＋本月抄錶狀態）　每月1號08:00提醒、每日20:00追未抄', '',
+    '【備註】', '・#備註 內容（掛到今天最近一筆寄運或收款）', '・注意：其他 #開頭若非指令會提示「無此指令」，不會被當備註', '',
+    '【清除/稽核（限老闆，要加「確定」）】', '・出勤 清除 確定／冰庫 清除 確定／台子 清除 確定／寄運資料 清除 確定', '・改價紀錄 清除 確定／損耗紀錄 清除 確定／冰庫總量 清除 確定', '・#非旭陽寄運（列出非旭陽車行的舊寄運，供決定清除）', '',
+    '（打「指令表」或「#指令表」隨時叫出這張）'
   ].join('\n');
 }
 function logGroupMessage(text, userId, groupId) {
@@ -3771,6 +3935,8 @@ function headerFor(name) {
   if (name === SHEET_FREEZER) return ['時間', '客戶', '品名', '動作', '數量', '該品項剩餘'];
   if (name === SHEET_MSG)     return ['時間', '群組訊息內容', '發言人ID', '群組ID'];
   if (name === SHEET_SHIP)    return ['時間', '客戶', '貨主', '品名', '等級', '件數', '包裝', '物流', '回報人', '備註', '單位', '單件重量'];
+  if (name === SHEET_METER)   return ['錶名', '出租方', '倍率', '電價', '目前讀數', '建錶日', '上次抄錶日', '上次金額', '狀態'];
+  if (name === SHEET_METER_LOG) return ['抄錶時間', '錶名', '出租方', '期間起', '期間迄', '上期讀數', '本期讀數', '錶面度數', '倍率', '實際度數', '電價', '應付金額', '回報人', '會計科目', '傳票號', '備註'];
   if (name === SHEET_STOCK)   return ['時間', '冰庫', '貨主', '品名', '數量', '更新人'];
   if (name === SHEET_PARK)    return ['客戶', '資訊', '更新時間'];
   if (name === SHEET_HIRE)    return ['員工', '入職時間'];
