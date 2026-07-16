@@ -96,6 +96,9 @@ const EXPORT_NAMES = [
   'codedOutstandingFor',
   'stripVendors',
   'shippingCleanSummary',
+  'parseShipItem',
+  'isShippingRecord',
+  'nonMainShipping',
   // ---- v3.4.3：顯示層去貨主名（所有品名輸出模板紅燈防迴歸；冰庫總量 formatStockGrouped 豁免）----
   'outClean',
   'shippingPull',

@@ -22,9 +22,9 @@ const SHEET_DUTY     = '外勤補貼';
 const SHEET_RECEIVABLE = '待收款';   // Task4 收款/未收款（含軟刪除稽核）
 const SHEET_FAIL     = '輸入失敗紀錄';   // v3.3 輸入失敗追蹤
 // 版本識別：交付部署前務必更新 BOT_VERSION / BOT_BUILD(最後 commit 短hash) / BOT_DATE（見 DECISIONS 開發紀律）
-var BOT_VERSION = 'v3.4.3';
+var BOT_VERSION = 'v3.4.4';
 var BOT_BUILD = '82250eb';
-var BOT_DATE = '2026/07/15';
+var BOT_DATE = '2026/07/16';
 function versionMessage() {
   return '📦 卡比集機器人 ' + BOT_VERSION + ' (' + BOT_BUILD + ') ' + BOT_DATE + '\n本輪重點修復：\n' +
     '【意圖判斷層】收台≠收款、聊天/填充詞不建寄運、引用(Line Quote)訊息唯讀\n' +
@@ -49,6 +49,7 @@ function versionMessage() {
     '【v3.4.1 修】鐵架單行出庫需含「鐵」才判定，避免「碼頭 美婷要一件田228 1*1200」這類人話被誤攔\n' +
     '【v3.4.2 修】鐵架全路徑(單行/多行/首行動詞/前置閘)一律要含「鐵架」二字才觸發，「進口山東 *5」等多行交易人話不再被誤攔；哲學：明確關鍵字才動作，格式相似不足以觸發\n' +
     '【v3.4.3 修】去貨主名補顯示層防線：寄運彙總/查詢、冰庫寄存/退貨/改價/損耗等所有品名輸出一律再過濾一次，貨主登記前存的舊髒列查詢時也不外洩貨主名(不回溯改資料)；冰庫總量按貨主分組為刻意設計故豁免\n' +
+    '【v3.4.4 修】寄運解析：等級支援含括號完整名(特(修清))、單件重量(18K/20K)解析並顯示於彙總；業務規則收緊＝只記錄旭陽寄運，其他車行(寄車9916)整筆不記(裝死)、非旭陽括號原文原樣留備註不拆解；老闆 #非旭陽寄運 可列既有誤存待清\n' +
     '你看到這行＝最新程式已生效（對照上方版本＋hash 即可確認是否新版）。';
 }
 const FONT_SIZE = 18;
@@ -124,6 +125,7 @@ function handleEvent(event) {
   if (text === '#版本') { replyToLine(replyToken, versionMessage()); return; }
   if (text === '#鐵架轉代號') { if (!ownerGate(source, replyToken)) return; const lg = migrateRackCodes(); replyToLine(replyToken, lg.length ? ('✅ 已為未收回鐵架配發代號 ' + lg.length + ' 筆：\n' + lg.join('\n') + '\n（之後收回請打代號，例：a*2收回）') : '目前沒有需要轉代號的未收回鐵架。'); return; }
   if (text === '#台子異常掃描') { if (!ownerGate(source, replyToken)) return; replyToLine(replyToken, scanTaiziAnomalies()); return; }
+  if (text === '#非旭陽寄運') { if (!ownerGate(source, replyToken)) return; replyToLine(replyToken, outClean(nonMainShipping())); return; }
   if (text === '#設定工作群組') { if (!ownerGate(source, replyToken)) return; addWorkGroup(chatId); replyToLine(replyToken, '✅ 已把「這個群組」設為工作群組。\n目前工作群組數：' + getWorkGroups().length); return; }
   if (text === '#取消工作群組') { if (!ownerGate(source, replyToken)) return; removeWorkGroup(chatId); replyToLine(replyToken, '已把這個群組移出工作群組。\n目前工作群組數：' + getWorkGroups().length); return; }
   // ★ 群組權限設定（老闆限定）
@@ -711,7 +713,7 @@ function handleEvent(event) {
       const sh = getSheet(SHEET_SHIP); const tz = getSheet(SHEET_TAIZI);
       if (shipRecs.length > 0) logIntent('寄運建立', text);
       ship.records.forEach(function (r) {
-        if (isShippingRecord(r, carrierSet)) sh.appendRow([nowStr(), r.customer, r.vendor, stripVendors(r.name), r.grade, r.qty, r.pack || '', r.logistics || '', '', stripVendors(r.note || ''), r.unit || '件']);
+        if (isShippingRecord(r, carrierSet)) sh.appendRow([nowStr(), r.customer, r.vendor, stripVendors(r.name), r.grade, r.qty, r.pack || '', r.logistics || '', '', stripVendors(r.note || ''), r.unit || '件', r.weight || '']);
         // 台子出庫：所有 pack=台子 品項都記（不論是否寄運；十方齋單不記寄運但台子要出庫）
         if (r.pack === '台子' && Number(r.qty) > 0) {
           if (freezerBalanceOf(r.customer, r.name) > 0) { taiziSkip.push(r.customer + ' ' + r.name); }
@@ -1070,11 +1072,48 @@ function getCarrierCustomers(carrier) { return getCarrierMap()[carrier] || []; }
 // 寄運定義收緊：所有物流商客戶名單合集（客戶名在此→視為寄運，即使無「寄X」）。
 function allCarrierCustomers() { const m = getCarrierMap(); const set = {}; Object.keys(m).forEach(function (k) { (m[k] || []).forEach(function (c) { if (c) set[String(c).trim()] = 1; }); }); return set; }
 // 單筆記錄是否算「寄運」：有物流指定(寄X) 或 客戶在物流客戶名單內。
-function isShippingRecord(r, carrierSet) { return !!(r && (r.logistics || (carrierSet || allCarrierCustomers())[String(r.customer).trim()])); }
+// v3.4.4 業務規則收緊：只記錄「主車行(旭陽)」的寄運。
+//   有指定物流 → 必須等於主車行(旭陽)才記；其他車行(如 寄車9916)＝不是我們的車，整筆不記錄(裝死)。
+//   無指定物流 → 客戶須在主車行客戶名單內才記。
+function isShippingRecord(r, carrierSet) {
+  if (!r) return false;
+  const main = getMainCarrier();
+  if (r.logistics) return String(r.logistics).trim() === main;
+  return !!(carrierSet || allCarrierCustomers())[String(r.customer).trim()];
+}
+// 診斷：列出「非主車行(旭陽)」的既有寄運資料（舊規則可能誤存），供老闆決定是否清除。唯讀。
+function nonMainShipping() {
+  const main = getMainCarrier();
+  const d = getSheet(SHEET_SHIP).getDataRange().getValues();
+  const rows = [];
+  for (let i = 1; i < d.length; i++) {
+    const logi = String(d[i][7] || '').trim();
+    if (!logi || logi === main) continue;
+    rows.push('・' + mdOf(d[i][0]) + '　' + (d[i][1] || '') + ' ' + (d[i][3] || '') + (d[i][4] ? ' ' + d[i][4] : '') + ' ' + (d[i][5] || '') + (d[i][10] || '件') + '　物流=' + logi + '（第 ' + (i + 1) + ' 列）');
+  }
+  if (!rows.length) return '✅ 目前沒有「' + main + '」以外車行的寄運資料。';
+  return '⚠️ 找到 ' + rows.length + ' 筆非「' + main + '」寄運（可能舊規則誤存，請決定是否清除）：\n' + rows.join('\n');
+}
 function setCarrierCustomers(carrier, list) { const m = getCarrierMap(); m[carrier] = list; PROPS.setProperty('CARRIER_CUST', JSON.stringify(m)); }
 
 /* ========================== 【寄運解析】 ========================== */
 function isGrade(s) { return /^(特大|特優|特|優|良|上|中|下|大|小|甲|乙|丙|A|B|C)$/.test(s); }
+// v3.4.4 等級本體(大富體系)：以下為「等級 token」判定用；括號修飾詞(目前只有「修清」，未來會新增)採結構規則自動支援，不維護白名單。
+var GRADE_BASE = '特大|特優|特|優|良|上|中|下|大|小|甲|乙|丙|A|B|C';
+// 從品項字串抽出「複合等級(括號緊貼等級token，如 特(修清))」與「單件重量(NK，如 18K/20K)」。
+// 回傳去掉這兩者後的 rest（供後續拆品名/數量）＋ gradeFull ＋ weight。
+// 結構規則：括號緊貼等級 token 才算等級；但括號內若為純包裝(台子/紙箱/圓籃/袋子/箱)或含「寄」(物流) → 不當等級，原樣留回給既有邏輯處理。
+function extractGradeWeight(rest) {
+  let gradeFull = '', weight = '';
+  rest = String(rest).replace(new RegExp('(' + GRADE_BASE + ')[（(]\\s*([^)）]+?)\\s*[）)]'), function (m, g, inner) {
+    const s = String(inner).trim();
+    if (/^(台子|紙箱|圓籃|袋子|箱)$/.test(s) || /寄/.test(s)) return m;   // 純包裝/物流括號不當等級
+    gradeFull = g + '(' + s + ')';
+    return ' ';
+  });
+  rest = rest.replace(/(?:^|\s)(\d+(?:\.\d+)?)\s*[KkＫ][Gg]?(?=\s|$)/, function (_, n) { weight = n + 'K'; return ' '; });   // 單件重量：NK / N.NKg → 正規化為 NK
+  return { rest: rest, gradeFull: gradeFull, weight: weight };
+}
 function nextHasItem(lines, fromIdx) {
   for (let j = fromIdx; j < lines.length; j++) {
     const nl = lines[j];
@@ -1102,33 +1141,46 @@ function parseShipping(text) {
     if (/\d+\s*(?:件|台(?!子)|包|箱)/.test(line)) {
       if (/[(（]\s*冰\s*[)）]/.test(line)) continue;
       let rest = line, vendor = '', pack = '', itemLogi = '', noteArr = [];
-      rest = rest.replace(/[（(]\s*([^)）]*?)\s*[）)]/g, function (_, inner) {
+      // v3.4.4：先抽「複合等級(特(修清))」與「單件重量(18K)」，避免被下方通用括號拆解誤丟進備註／整個丟棄
+      const _gw = extractGradeWeight(rest); rest = _gw.rest; const gradeFull = _gw.gradeFull, weight = _gw.weight;
+      const _main = getMainCarrier();
+      rest = rest.replace(/[（(]\s*([^)）]*?)\s*[）)]/g, function (whole, inner) {
         let s = String(inner).trim();
-        const lg = s.match(/寄車?\s*(\S+)/);
-        if (lg && /寄/.test(s)) { itemLogi = lg[1]; s = s.replace(lg[0], ' ').trim(); }
+        if (/寄/.test(s)) {
+          const lg = s.match(/寄車?\s*(\S+)/);
+          if (lg && lg[1] === _main) { itemLogi = _main; s = s.replace(lg[0], ' ').replace(/\s+/g, ' ').trim(); if (s) noteArr.push(s); }
+          else { noteArr.push(String(whole).trim()); }   // v3.4.4：含「寄」但非旭陽(如 寄車9916)→整段括號原文原樣當備註，不抽取不拆解
+          return ' ';
+        }
         s = s.replace(/(台子|紙箱|圓籃|袋子|箱)/g, function (p) { pack = (p === '箱' ? '紙箱' : p); return ' '; });
         s = s.replace(/\s+/g, ' ').trim();
         if (s) noteArr.push(s);
         return ' ';
       });
-      if (!itemLogi) { const lg2 = rest.match(/寄車?\s*(\S+)/); if (lg2) { itemLogi = lg2[1]; rest = rest.replace(lg2[0], ' '); } }
+      if (!itemLogi) { const lg2 = rest.match(/寄車?\s*(\S+)/); if (lg2 && lg2[1] === _main) { itemLogi = _main; rest = rest.replace(lg2[0], ' '); } }   // v3.4.4：行內裸「寄X」也只認旭陽
       const qm = rest.match(/(\d+)\s*(件|台(?!子)|包|箱)/); const qty = qm ? qm[1] : ''; const unit = qm ? qm[2] : '件';
       if (qm) { if (qm[2] === '台' && !pack) pack = '台子'; rest = (rest.slice(0, qm.index) + ' ' + rest.slice(qm.index + qm[0].length)); }
       rest = rest.replace(/\s+/g, ' ').trim();
       for (let j = 0; j < vendors.length; j++) { if (vendors[j] && rest.indexOf(vendors[j]) === 0) { vendor = vendors[j]; rest = rest.slice(vendors[j].length).trim(); break; } }
       if (!itemLogi) { for (let c = 0; c < knownCarriers.length; c++) { const cr = knownCarriers[c]; if (cr && rest.indexOf(cr) === 0 && rest.length > cr.length) { itemLogi = cr; rest = rest.slice(cr.length).trim(); break; } } }
       const tk = rest.split(/\s+/).filter(Boolean);
-      let grade = '', name = '';
-      let gi = -1; for (let i = 0; i < tk.length; i++) { if (isGrade(tk[i])) { gi = i; break; } }
-      if (gi >= 0) {
-        grade = tk[gi];
-        const before = tk.slice(0, gi);
-        if (before.length <= 1) { name = before.join(' '); }
-        else if (vendor) { name = before.join(' '); }
-        else { vendor = before[0]; name = before.slice(1).join(' '); }
-      } else { name = tk.join(' '); }
+      let grade = gradeFull || '', name = '';
+      if (gradeFull) {
+        // 複合等級已抽離，tk 全為品名(可能前綴貨主)：比照下方無括號等級路徑的貨主拆法
+        if (tk.length > 1 && !vendor) { vendor = tk[0]; name = tk.slice(1).join(' '); }
+        else name = tk.join(' ');
+      } else {
+        let gi = -1; for (let i = 0; i < tk.length; i++) { if (isGrade(tk[i])) { gi = i; break; } }
+        if (gi >= 0) {
+          grade = tk[gi];
+          const before = tk.slice(0, gi);
+          if (before.length <= 1) { name = before.join(' '); }
+          else if (vendor) { name = before.join(' '); }
+          else { vendor = before[0]; name = before.slice(1).join(' '); }
+        } else { name = tk.join(' '); }
+      }
       if (!name) name = rest;
-      if (customer) records.push({ customer: customer, vendor: vendor, name: name, grade: grade, qty: qty, pack: pack, logistics: itemLogi || logistics, note: noteArr.join(' '), unit: unit });
+      if (customer) records.push({ customer: customer, vendor: vendor, name: name, grade: grade, qty: qty, pack: pack, logistics: itemLogi || logistics, note: noteArr.join(' '), unit: unit, weight: weight });
       else unresolvedItems++;   // Bug5c：判不出客戶 → 不亂掛到上一個客戶，計入待確認
     } else {
       // Bug5b：整行等於已知物流商/貨主名 → 視為該段物流指定，不當客戶
@@ -1185,7 +1237,7 @@ function outClean(str) {
 }
 function shippingCleanSummary(recs) {
   const byCust = {}; const order = [];
-  recs.forEach(function (r) { const c = stripVendors(r.customer) + (r.logistics ? '（寄車' + r.logistics + '）' : ''); if (!byCust[c]) { byCust[c] = []; order.push(c); } byCust[c].push('・' + stripVendors(r.name) + (r.grade ? ' ' + r.grade : '') + ' ' + r.qty + (r.unit || '件') + (r.pack ? '（' + r.pack + '）' : '') + (r.note ? '（' + stripVendors(r.note) + '）' : '')); });
+  recs.forEach(function (r) { const c = stripVendors(r.customer) + (r.logistics ? '（寄車' + r.logistics + '）' : ''); if (!byCust[c]) { byCust[c] = []; order.push(c); } byCust[c].push('・' + stripVendors(r.name) + (r.grade ? ' ' + r.grade : '') + (r.weight ? ' ' + r.weight : '') + ' ' + r.qty + (r.unit || '件') + (r.pack ? '（' + r.pack + '）' : '') + (r.note ? '（' + stripVendors(r.note) + '）' : '')); });
   let out = '';
   order.forEach(function (c) { out += '【' + c + '】\n' + byCust[c].join('\n') + '\n'; });
   return out.trim();
@@ -1257,6 +1309,8 @@ function cancelShipping(text) {
 }
 function parseShipItem(s, stripCarrier, knownCarriers) {
   let rest = String(s).replace(/^[・·•]/, '').trim(); let pack = '';
+  // v3.4.4：先抽複合等級(特(修清))與單件重量(18K)，再做通用括號拆解
+  const _gw = extractGradeWeight(rest); rest = _gw.rest; const gradeFull = _gw.gradeFull, weight = _gw.weight;
   rest = rest.replace(/[（(]\s*([^)）]+?)\s*[）)]/g, function (_, inner) { const pm = String(inner).match(/(台子|紙箱|圓籃|袋子|箱)/); if (pm) pack = (pm[1] === '箱' ? '紙箱' : pm[1]); return ' '; });
   let qty = '', unit = '件';
   const qm = rest.match(/(\d+)\s*(件|台(?!子)|包|箱)/);
@@ -1265,10 +1319,10 @@ function parseShipItem(s, stripCarrier, knownCarriers) {
   rest = rest.replace(/\s+/g, ' ').trim();
   let logistics = '';
   if (stripCarrier) { for (let c = 0; c < knownCarriers.length; c++) { const cr = knownCarriers[c]; if (cr && rest.indexOf(cr) === 0 && rest.length > cr.length) { logistics = cr; rest = rest.slice(cr.length).trim(); break; } } }
-  const tk = rest.split(/\s+/).filter(Boolean); let grade = '', name = '', gi = -1;
-  for (let i = 0; i < tk.length; i++) { if (isGrade(tk[i])) { gi = i; break; } }
-  if (gi >= 0) { grade = tk[gi]; name = tk.slice(0, gi).join(' '); } else name = tk.join(' ');
-  return { name: name, grade: grade, qty: qty, pack: pack, unit: unit, logistics: logistics };
+  const tk = rest.split(/\s+/).filter(Boolean); let grade = gradeFull || '', name = '', gi = -1;
+  if (gradeFull) { name = tk.join(' '); }
+  else { for (let i = 0; i < tk.length; i++) { if (isGrade(tk[i])) { gi = i; break; } } if (gi >= 0) { grade = tk[gi]; name = tk.slice(0, gi).join(' '); } else name = tk.join(' '); }
+  return { name: name, grade: grade, qty: qty, pack: pack, unit: unit, logistics: logistics, weight: weight };
 }
 function handleShippingModify(text) {
   const lines = String(text).split('\n').map(function (l) { return l.trim(); });
@@ -1393,8 +1447,8 @@ function shippingPull(key, dateArg) {
     const d = ymdNum(data[i][0]); if (!d || d < lo || d > hi) continue;
     const c = cust;
     if (!byCust[c]) { byCust[c] = []; byNote[c] = []; order.push(c); }
-    const _nm = (data[i][3] || ''); const _g = String(data[i][4] || '').trim(); const _q = (data[i][5] || ''); const _u = (data[i][10] && data[i][10] !== '件') ? data[i][10] : ''; const _p = data[i][6] ? '（' + data[i][6] + '）' : '';
-    byCust[c].push((_nm + (_g ? ' ' + _g : '') + (_q ? ' ' + _q + _u : '') + _p).trim());
+    const _nm = (data[i][3] || ''); const _g = String(data[i][4] || '').trim(); const _q = (data[i][5] || ''); const _u = (data[i][10] && data[i][10] !== '件') ? data[i][10] : ''; const _p = data[i][6] ? '（' + data[i][6] + '）' : ''; const _w = data[i][11] ? ' ' + data[i][11] : '';
+    byCust[c].push((_nm + (_g ? ' ' + _g : '') + _w + (_q ? ' ' + _q + _u : '') + _p).trim());
     if (data[i][9]) { const ex = expandPlace(data[i][9], PLACES); if (byNote[c].indexOf(ex) === -1) byNote[c].push(ex); }
     n++;
   }
@@ -1494,7 +1548,7 @@ function handleShippingCmd(text) {
       summary.push(op.cust + ' ' + op.name + (op.grade ? ' ' + op.grade : '') + (op.pack ? '（' + op.pack + '）' : '') + '：' + cur + ' → ' + nb);
     } else {
       const nb = (op.mode === 'dec') ? 0 : op.num;
-      const row = [nowStr(), op.cust, '', stripVendors(op.name), op.grade || '', nb, op.pack || '', getMainCarrier(), '', '', '件'];   // 寫入分欄乾淨：品名去貨主名(比照主寫入路徑 line 713)，補此場外寫入路徑的漏
+      const row = [nowStr(), op.cust, '', stripVendors(op.name), op.grade || '', nb, op.pack || '', getMainCarrier(), '', '', '件', op.weight || ''];   // 寫入分欄乾淨：品名去貨主名(比照主寫入路徑 line 713)，補此場外寫入路徑的漏
       sheet.appendRow(row); data.push(row);
       summary.push('新增：' + op.cust + ' ' + op.name + (op.grade ? ' ' + op.grade : '') + (op.pack ? '（' + op.pack + '）' : '') + ' ' + nb);
     }
@@ -3716,7 +3770,7 @@ function headerFor(name) {
   if (name === SHEET_ATTEND)  return ['時間', '員工', '動作', '狀態', '回報人'];
   if (name === SHEET_FREEZER) return ['時間', '客戶', '品名', '動作', '數量', '該品項剩餘'];
   if (name === SHEET_MSG)     return ['時間', '群組訊息內容', '發言人ID', '群組ID'];
-  if (name === SHEET_SHIP)    return ['時間', '客戶', '貨主', '品名', '等級', '件數', '包裝', '物流', '回報人', '備註', '單位'];
+  if (name === SHEET_SHIP)    return ['時間', '客戶', '貨主', '品名', '等級', '件數', '包裝', '物流', '回報人', '備註', '單位', '單件重量'];
   if (name === SHEET_STOCK)   return ['時間', '冰庫', '貨主', '品名', '數量', '更新人'];
   if (name === SHEET_PARK)    return ['客戶', '資訊', '更新時間'];
   if (name === SHEET_HIRE)    return ['員工', '入職時間'];
