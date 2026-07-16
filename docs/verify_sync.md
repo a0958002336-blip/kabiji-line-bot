@@ -12,12 +12,12 @@
 
 1. 在 LINE（老闆帳號）打 `#版本`，看第一行：
    ```
-   📦 卡比集機器人 v3.4.3 (82250eb) 2026/07/15
+   📦 卡比集機器人 v3.4.4 (207d277) 2026/07/16
    ```
    括號內就是**線上碼的 build hash**。
 2. 打開 git 最新的 `卡比集機器人.gs`（或 GitHub 上該檔），找到最上方：
    ```js
-   var BOT_BUILD = '82250eb';
+   var BOT_BUILD = '207d277';
    ```
 3. **兩個 hash 一樣 → 一致 ✅**；**不一樣 → 兩邊分岔，見下方〈發現分岔怎麼辦〉**。
 
@@ -69,11 +69,11 @@ diff <(git show HEAD:卡比集機器人.gs) <(sed 's/\r$//' ~/Desktop/gas_online
 
 | 項目 | 值 |
 |------|-----|
-| 部署 commit（.gs 最後變更） | `81b5e2b` |
-| `#版本` 顯示 / `BOT_BUILD` | `82250eb`（＝版本 commit，回填 commit 的父；兩者僅差 BOT_BUILD 一行） |
-| git blob hash（`git rev-parse HEAD:卡比集機器人.gs`） | `da82d7ac575957ced36925afb3f55f95bf16108c` |
-| sha256（LF 正規化） | `cdeb43895d606b98e37120cc14a3e9bc2e38b3d45d3a29e6f4e55f9d33a5638c` |
-| 位元組數 / 行數 | `297497` / `4058` |
+| 部署 commit（.gs 最後變更） | `249c105` |
+| `#版本` 顯示 / `BOT_BUILD` | `207d277`（＝版本 commit，回填 commit 的父；兩者僅差 BOT_BUILD 一行） |
+| git blob hash（`git rev-parse HEAD:卡比集機器人.gs`） | `992f21780c9ea9ae878e0216fa77f76479437275` |
+| sha256（LF 正規化） | `b7e9c6867b8ef65f00839cb3d774a6875ab4d5c947997952dea659d232de92cd` |
+| 位元組數 / 行數 | `301981` / `4112` |
 
 > 對照時以「當下 git HEAD 實算值」為準；上表是交付當時的快照，方便一眼確認。
 
