@@ -25,11 +25,14 @@ const SHEET_METER    = '電錶設定';        // v3.4.5 電錶月結：可變狀
 const SHEET_METER_LOG = '電費紀錄';       // v3.4.5 電錶月結：不可變帳(每期快照，ERP 日記帳預留)
 var ACCOUNT_METER = '營業支出-電費';       // ERP 日記帳預留會計科目
 // 版本識別：交付部署前務必更新 BOT_VERSION / BOT_BUILD(最後 commit 短hash) / BOT_DATE（見 DECISIONS 開發紀律）
-var BOT_VERSION = 'v3.4.5';
+var BOT_VERSION = 'v3.4.6';
 var BOT_BUILD = '95fde8a';
-var BOT_DATE = '2026/07/16';
+var BOT_DATE = '2026/07/28';
 function versionMessage() {
   return '📦 卡比集機器人 ' + BOT_VERSION + ' (' + BOT_BUILD + ') ' + BOT_DATE + '\n本輪重點修復：\n' +
+    '【v3.4.6 效能】knownShipCustomers／knownFreezerCustomers／rackNet 加入請求內快取——解決寄運資料累積後「每一行都重掃整張表」導致執行逾時、機器人全面停擺\n' +
+    '【v3.4.6 防靜默】疑似鐵架收/出單但品名沒寫「鐵架」→ 明確回覆教學並記入輸入失敗紀錄,不再無聲吞掉\n' +
+    '【v3.4.6 修】寄運客戶判定:裸動詞行(收／收回／出／出貨…)不得被當成客戶名\n' +
     '【意圖判斷層】收台≠收款、聊天/填充詞不建寄運、引用(Line Quote)訊息唯讀\n' +
     '【群組權限】市場群唯讀、# 設定限老闆、#註冊老闆防搶注＋#轉移老闆\n' +
     '【收款/待收款】新模組：偵測建立→#已收→#取消收款(軟刪除留Log)；清單顯 R 編號、多筆命中需指定\n' +
@@ -818,6 +821,21 @@ function handleEvent(event) {
       return;
   } }
 
+  /* ---- v3.4.6:疑似鐵架收/出單但沒寫「鐵架」二字 → 明確教學,不再靜默吞掉 ----
+   *   觸發條件(四者皆須成立):三行以上 ＋ 有一行是裸動詞(收/出…) ＋ 有「名稱*數量」品項行
+   *   ＋ 全文不含「鐵架」且不含「台子」(台子有獨立流程,不可誤攔)。
+   *   哲學不變:仍然不寫入(寧漏勿誤),只是把「靜默」改成「明說原因」。 */
+  {
+    const _ls = text.split('\n').map(function (l) { return l.trim(); }).filter(Boolean);
+    const _verb = _ls.some(function (l) { return /^(收|收回|回收|出|出借|出貨|出去)\s*$/.test(l); });
+    const _items = _ls.filter(function (l) { return /^.+?\s*[*＊×xX：:]\s*\d+\s*$/.test(l); });
+    if (_ls.length >= 3 && _verb && _items.length && !/鐵架/.test(text) && !/台子/.test(text)) {
+      logInputFail('疑似鐵架未寫鐵架', source, chatId, text);
+      replyToLine(replyToken, '⚠️ 看起來要收/出器材,但品名沒有「鐵架」二字,為了安全沒有寫入。\n\n請把品名補完整再送一次,例:\n' + _ls[0] + '\n收\n' + _items[0].replace(/^(.+?)\s*([*＊×xX：:])/, function (m, nm, sep) { return (/鐵$/.test(nm) ? nm + '架' : nm + '鐵架') + sep; }) + '\n\n(老闆打「查輸入失敗」可看被擋下的紀錄)');
+      return;
+    }
+  }
+
   /* ---- #備註 防呆(v3.4.5)：只有明確「#備註 內容」才掛備註；其他 #開頭 一律視為「像指令但不存在」明確報錯，
    *      不再靜默兜底成備註（避免 #新增電錶 這類舊版沒有／打錯字的指令被誤掛到寄運/收款備註）---- */
   if (/^#備註/.test(text)) {
@@ -1370,7 +1388,8 @@ function parseShipping(text) {
       const _cand = line.replace(/[\(（]?\s*寄\s*[車運到去]?\s*[^\s)）]+\s*[）)]?/, '').replace(/自己載|自取/g, '').replace(/[\(（）\)]/g, '').trim();
       // Bug1/R1.1：純數字抬頭且該行無「寄」→ 預設不建寄運（1828 誤記防呆）；Task5：數字白名單放行。
       // Bug5a：指示句/含空白長句不得為客戶（fail-closed）。
-      customer = (looksLikeInstruction(_cand) || (/^\d+$/.test(_cand) && !/寄/.test(line) && !isKnownShipCustomer(_cand))) ? '' : _cand;
+      // v3.4.6:裸動詞行(收／收回／出／出貨…)不得被當成客戶名
+      customer = (/^(收|收回|回收|出|出借|出貨|出去)$/.test(_cand) || looksLikeInstruction(_cand) || (/^\d+$/.test(_cand) && !/寄/.test(line) && !isKnownShipCustomer(_cand))) ? '' : _cand;
     }
   }
   if (msgLogistics) records.forEach(function (r) { if (!r.logistics) r.logistics = msgLogistics; });
@@ -1633,10 +1652,14 @@ function isKnownShipCustomer(name) {
   try { return knownShipCustomers().indexOf(n) !== -1; } catch (e) { return false; }
 }
 function knownShipCustomers() {
+  // v3.4.6 效能:整張寄運資料掃描結果存進 __REQ_CACHE(每則訊息事件開頭清空),
+  // 避免 parseShipping 逐行呼叫時重複全表掃描。回傳內容與排序完全不變。
+  if (typeof __REQ_CACHE !== 'undefined' && __REQ_CACHE.knownShipCustomers) return __REQ_CACHE.knownShipCustomers;
   const set = {}; const arr = [];
   try { const d = getSheet(SHEET_SHIP).getDataRange().getValues(); for (let i = 1; i < d.length; i++) { const c = String(d[i][1] || '').trim(); if (c && !set[c]) { set[c] = 1; arr.push(c); } } } catch (e) { }
   const cm = getCarrierMap(); Object.keys(cm).forEach(function (k) { (cm[k] || []).forEach(function (c) { if (c && !set[c]) { set[c] = 1; arr.push(c); } }); });
   arr.sort(function (a, b) { return b.length - a.length; });
+  if (typeof __REQ_CACHE !== 'undefined') __REQ_CACHE.knownShipCustomers = arr;
   return arr;
 }
 // 場外寫入寄運：解析品名(含等級/包裝)
@@ -1869,9 +1892,11 @@ function freezerBalanceOf(customer, product) {
 }
 /* ---- 場外一行寫入冰庫（與寄運場外指令相同邏輯）---- */
 function knownFreezerCustomers() {
+  if (typeof __REQ_CACHE !== 'undefined' && __REQ_CACHE.knownFreezerCustomers) return __REQ_CACHE.knownFreezerCustomers;   // v3.4.6 效能
   const set = {}; const arr = [];
   try { const d = getSheet(SHEET_FREEZER).getDataRange().getValues(); for (let i = 1; i < d.length; i++) { const c = String(d[i][1] || '').trim(); if (c && !set[c]) { set[c] = 1; arr.push(c); } } } catch (e) { }
   arr.sort(function (a, b) { return b.length - a.length; });
+  if (typeof __REQ_CACHE !== 'undefined') __REQ_CACHE.knownFreezerCustomers = arr;
   return arr;
 }
 function handleFreezerCmd(text) {
@@ -2499,18 +2524,30 @@ function commandSheet() {
     '【客戶停車/備註】', '・查 客戶名（停車）', '・查空車重量1856', '・客戶停車位置查詢', '',
     '【冰庫】', '・查冰庫　查冰庫 客戶名', '・查冰庫總庫存', '・整張寄冰：單據最後打「冰」或「寄冰」',
     '・貼查冰庫結果後，每項可加：出N(出貨)／修改N(改成N)／取消(歸0)', '・批次：第一行「修改庫存」→客戶→每行 品名 數量', '',
-    '【鐵架/台子】', '・查鐵架　查台子', '・出庫：客戶 鐵架名*數量（系統自動配代號）', '・收回：代號*數量收回（例 a*2收回；多筆 a*2 b*3收回；a收回=全收）', '・舊資料轉代號：#鐵架轉代號（限老闆）', '',
+    '【鐵架/台子】',
+    '・⚠️ 品名一定要含「鐵架」二字，否則不會記錄',
+    '　✅ 祐昌慶鐵架*1　❌ 祐昌慶*1（會被擋下並提示）',
+    '・查鐵架　查台子　查{客戶}鐵架',
+    '・出庫：客戶名 換行 品牌鐵架*數量（系統自動配代號）',
+    '・收回：代號*數量收回（例 a*2收回；多筆 a*2 b*3收回；a收回=全收）',
+    '・收回也可：客戶名 換行 收 換行 品牌鐵架*數量',
+    '・舊資料轉代號：#鐵架轉代號（限老闆）', '',
     '【收款】', '・#待收款／#未收（未完款清單）／#收款明細', '・指定收款人：#6986收款 阿良／收款人 R0003 名字／或回覆待收款訊息', '・查單：#6986（或 #6986 誰收款）', '・完款：#已收 6986（或 R0003）／#取消收款 R0003', '',
     '【寄運】', '・退貨：[日期] 客戶 品名 退N台', '・記錄：把寄運單據貼上', '・拉出：旭陽寄運資料 6/20',
     '・取消：客戶：清除(整筆)／客戶：品名 數量 取消(單項)／寄運資料 清除 確定(全部)',
-    '・場外增改：寄運 客戶：品名 數量(新增/設定)／+N(增)／-N(減)／修改N／取消', '',
+    '・場外增改：寄運 客戶：品名 數量(新增/設定)／+N(增)／-N(減)／修改N／取消',
+    '・注意：只記錄旭陽寄運，其他車行整筆不記', '',
     '【出勤】', '・中控總覽（限老闆）', '・打卡：員工名＋上班／下班／遲到／請假', '・查員工出勤／查遲到／查請假／查上班／查下班', '・出勤統計／綜合評比（限老闆）', '・入職：員工名＋入職', '・借支：員工名＋借＋金額', '・外勤補貼：員工名＋出外勤＋地點', '',
     '【改價/損耗/匯款】', '・客戶 改價 內容', '・客戶 匯款 金額', '・對帳單貼上（扣除N件/改NNN元）', '・查改價　查損耗', '',
     '【群組權限（限老闆）】', '・#群組ID', '・#設為管理群組（這群可寫入）', '・#設為市場群組（這群唯讀）', '・#群組權限', '',
-    '【設定】', '・#版本　#設定客戶 名稱　#查客戶', '・#貨主名單／#新增貨主 X', '・#冰庫名單／#新增冰庫 X', '・#安靜／#取消安靜（僅本群組）', '・#全部安靜／#全部取消安靜（全部群組・限老闆）', '・#開啟日期戳／#關閉日期戳／#日期戳狀態（計價單回當日日期・限老闆）', '・查輸入失敗／今日輸入失敗／查輸入失敗 7/1-7/10（限老闆）', '',
+    '【設定】', '・#版本　#設定客戶 名稱　#查客戶', '・#貨主名單／#新增貨主 X', '・#冰庫名單／#新增冰庫 X', '・#安靜／#取消安靜（僅本群組）', '・#全部安靜／#全部取消安靜（全部群組・限老闆）', '・#開啟日期戳／#關閉日期戳／#日期戳狀態（計價單回當日日期・限老闆）', '',
     '【電錶月結】', '・#新增電錶 錶名 倍率30 電價5 起始829 [出租方X]（限老闆）', '・#抄錶 錶名 本期讀數（回算式並記錄；讀數異常或同日重抄需加「確認」）', '・#電錶 錶名（查狀態）／#電費紀錄 錶名（查歷史）', '・#電錶設定 錶名 電價5.2／倍率30／出租方X（限老闆，只影響之後）', '・#停用電錶 錶名／#啟用電錶 錶名（限老闆）', '・#電錶提醒（查提醒設定＋本月抄錶狀態）　每月1號08:00提醒、每日20:00追未抄', '',
     '【備註】', '・#備註 內容（掛到今天最近一筆寄運或收款）', '・注意：其他 #開頭若非指令會提示「無此指令」，不會被當備註', '',
-    '【清除/稽核（限老闆，要加「確定」）】', '・出勤 清除 確定／冰庫 清除 確定／台子 清除 確定／寄運資料 清除 確定', '・改價紀錄 清除 確定／損耗紀錄 清除 確定／冰庫總量 清除 確定', '・#非旭陽寄運（列出非旭陽車行的舊寄運，供決定清除）', '',
+    '【出問題時先查這三個（限老闆）】',
+    '・查輸入失敗／今日輸入失敗／查輸入失敗 7/1-7/10　←被擋下的輸入都在這',
+    '・#台子異常掃描　←抓計價單被誤判成台子出庫',
+    '・#非旭陽寄運　←抓舊規則誤存的別家車行寄運', '',
+    '【清除（限老闆，要加「確定」）】', '・出勤 清除 確定／冰庫 清除 確定／台子 清除 確定／寄運資料 清除 確定', '・改價紀錄 清除 確定／損耗紀錄 清除 確定／冰庫總量 清除 確定', '',
     '（打「指令表」或「#指令表」隨時叫出這張）'
   ].join('\n');
 }
@@ -3400,6 +3437,7 @@ function buildRackReply(action, p, remain) {
 function appendRackRecord(action, rackId, qty, customer, isIn) {
   const code = (action === '出庫') ? nextRackCode() : '';
   getSheet(SHEET_RACK).appendRow([nowStr(), code, action, rackId, qty, customer]);
+  if (typeof __REQ_CACHE !== 'undefined') __REQ_CACHE.rackNet = null;   // v3.4.6:寫入後讓快取失效
   return code;
 }
 function appendFinanceRecord(customer, type, amount, content) { getSheet(SHEET_FINANCE).appendRow([nowStr(), customer, type, amount, content, '']); }
@@ -4171,6 +4209,10 @@ function nextRackCode() {
 /* ---- 鐵架淨額（代號制＋舊名稱制併存）：有代號依代號結算；無代號依 客戶|名稱 結算。
  *      若無代號的收回把舊制扣成負數（新舊混用），自動抵到同客戶同名稱的代號紀錄。 ---- */
 function rackNet() {
+  // v3.4.6 效能:每則訊息事件內只算一次(__REQ_CACHE 於 handleEvent 開頭清空)。
+  // 安全性:現行所有鐵架寫入路徑皆「先讀 rackNet → 最後才批次寫入」,同一事件內不會寫後重讀。
+  // ⚠️ 若日後新增「寫入後又要重算」的邏輯,請在重算前先加:__REQ_CACHE.rackNet = null;
+  if (typeof __REQ_CACHE !== 'undefined' && __REQ_CACHE.rackNet) return __REQ_CACHE.rackNet;
   const data = getSheet(SHEET_RACK).getDataRange().getValues();
   const coded = {}; const codedOrder = [];
   const legacy = {}; const legacyOrder = [];
@@ -4201,7 +4243,9 @@ function rackNet() {
     });
     L.n = -deficit;
   });
-  return { coded: coded, codedOrder: codedOrder, legacy: legacy, legacyOrder: legacyOrder };
+  const _res = { coded: coded, codedOrder: codedOrder, legacy: legacy, legacyOrder: legacyOrder };
+  if (typeof __REQ_CACHE !== 'undefined') __REQ_CACHE.rackNet = _res;
+  return _res;
 }
 /* ---- 鐵架代號收回：a*2收回（多筆 a*2 b*3收回；a收回＝該代號全收）---- */
 function handleRackCodeCollect(text) {

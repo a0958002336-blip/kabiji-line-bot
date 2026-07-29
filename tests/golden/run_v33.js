@@ -31,16 +31,37 @@ function failRows(env) { return env.sheets[FAIL] ? env.sheets[FAIL].__rows.slice
   check('①4 有輸入者欄', r[0] && !!r[0][2], JSON.stringify(r[0]));
 })();
 (function () {
-  // v3.4.2：不含「鐵架」二字的「名稱*數字」多行 → 裝死無視（哲學：明確關鍵字才動作，格式相似不足以觸發）；不再誤判鐵架格式、不留檔、零寫入
+  // v3.4.6（原 v3.4.2 ①5 之後繼）：不含「鐵架」二字的「名稱*數字」多行 → 不再靜默裝死，
+  //   改為「明確教學回覆 ＋ 留檔(類型=疑似鐵架未寫鐵架)」。
+  //   ⚠️ 安全不變量不變：仍然零寫入（寧漏勿誤），此條不得放寬或移除。
   const RACK = '鐵架庫存';
   ['陳記\n收\n蘋果箱*2', '陳記\n收\n旭陽鐵*2'].forEach(function (t, i) {
     const e = mkEnv();
     const rep = send(e, t);
     const fr = failRows(e);
-    check('①5.' + (i + 1) + ' 無「鐵架」二字「' + t.replace(/\n/g, '⏎') + '」→ 裝死(無回應/零留檔/零寫入)',
-      rep === '' && !fr.some(function (x) { return x[1] === '鐵架格式'; }) && (!e.sheets[RACK] || e.sheets[RACK].__rows.length <= 1),
-      'rep=' + JSON.stringify(rep) + ' fail=' + JSON.stringify(fr));
+    check('①5.' + (i + 1) + 'a 無「鐵架」二字「' + t.replace(/\n/g, '⏎') + '」→ 明確教學(非靜默)',
+      rep !== '' && /鐵架/.test(rep) && /沒有寫入/.test(rep),
+      'rep=' + JSON.stringify(rep));
+    check('①5.' + (i + 1) + 'b 留檔類型=疑似鐵架未寫鐵架',
+      fr.some(function (x) { return x[1] === '疑似鐵架未寫鐵架'; }),
+      'fail=' + JSON.stringify(fr));
+    check('①5.' + (i + 1) + 'c 鐵架庫存零寫入(安全不變量,不得放寬)',
+      !e.sheets[RACK] || e.sheets[RACK].__rows.length <= 1,
+      JSON.stringify(e.sheets[RACK] && e.sheets[RACK].__rows));
   });
+  // v3.4.6：教學範例補「鐵架」不得產生贅字——名稱已以「鐵」結尾者只補「架」
+  (function () {
+    const e = mkEnv();
+    const rep = send(e, '陳記\n收\n旭陽鐵*2');
+    check('①5.5 名稱以「鐵」結尾 → 範例為 旭陽鐵架*2(不疊字)',
+      /旭陽鐵架\*2/.test(rep) && !/鐵鐵架/.test(rep), 'rep=' + JSON.stringify(rep));
+  })();
+  (function () {
+    const e = mkEnv();
+    const rep = send(e, '陳記\n收\n蘋果箱*2');
+    check('①5.6 名稱未含「鐵」→ 範例為 蘋果箱鐵架*2',
+      /蘋果箱鐵架\*2/.test(rep), 'rep=' + JSON.stringify(rep));
+  })();
   // 保留 v3.3「格式警示→留檔」覆蓋：含「鐵架」二字但夾雜壞品名 → 仍跳格式警示並寫入輸入失敗紀錄
   const env = mkEnv();
   send(env, '陳記\n收\n旭陽鐵架*2\n蘋果*3');
