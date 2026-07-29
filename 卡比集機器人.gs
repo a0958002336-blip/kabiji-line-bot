@@ -24,7 +24,14 @@ const SHEET_FAIL     = '輸入失敗紀錄';   // v3.3 輸入失敗追蹤
 const SHEET_METER    = '電錶設定';        // v3.4.5 電錶月結：可變狀態(倍率/電價/目前讀數/上次抄錶)
 const SHEET_METER_LOG = '電費紀錄';       // v3.4.5 電錶月結：不可變帳(每期快照，ERP 日記帳預留)
 var ACCOUNT_METER = '營業支出-電費';       // ERP 日記帳預留會計科目
-// 版本識別：交付部署前務必更新 BOT_VERSION / BOT_BUILD(最後 commit 短hash) / BOT_DATE（見 DECISIONS 開發紀律）
+// 版本識別：交付部署前務必更新 BOT_VERSION / BOT_BUILD / BOT_DATE（見 DECISIONS 開發紀律）
+// ⚠️ BOT_BUILD 規則（易誤解，寫明）：填的是「版本 commit」的短 hash，不是 HEAD 的。
+//    固定流程：① 先 commit 版本變更（此時 BOT_BUILD 仍是上一版的值）
+//              ② 取該版本 commit 的短 hash → ③ 回填，另開一個 chore(版本) commit
+//    因此回填後 BOT_BUILD 恆等於 HEAD 的父 commit；再加封版 commit 後會再差一格。
+//    這是刻意的：hash 標示的是「哪一版」，不是「最後一次提交」。
+//    ❌ 絕不可用 git commit --amend 回填——amend 會改掉 commit hash，
+//       填進去的值當場失效，比不填更糟（永遠差一格且指向不存在的 commit）。
 var BOT_VERSION = 'v3.4.6';
 var BOT_BUILD = '888a515';
 var BOT_DATE = '2026/07/28';
