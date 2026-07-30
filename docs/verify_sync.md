@@ -69,11 +69,16 @@ diff <(git show HEAD:卡比集機器人.gs) <(sed 's/\r$//' ~/Desktop/gas_online
 
 | 項目 | 值 |
 |------|-----|
-| 部署 commit（.gs 最後變更） | `a8d08f1` |
-| `#版本` 顯示 / `BOT_BUILD` | `95fde8a`（＝版本 commit，回填 commit 的父；兩者僅差 BOT_BUILD 一行） |
-| git blob hash（`git rev-parse HEAD:卡比集機器人.gs`） | `5244f11e4ee798c661137e51a49a761eb194fc65` |
-| sha256（LF 正規化） | `1da17aa2afeca4b95b0f3cdb6274f1450f7ffb125f99093cb9a4a99eeb3cbe8b` |
-| 位元組數 / 行數 | `318920` / `4278` |
+| 版本 | `v3.4.6`（2026/07/30 封版，**尚未部署**：LINE 平台 500/505 未解＋主車行名稱待確認） |
+| 部署 commit（.gs 最後變更） | `72b1b52` |
+| `#版本` 顯示 / `BOT_BUILD` | `888a515`（＝版本 commit；回填走獨立 `chore(版本)` commit，故恆為 HEAD 的父/祖，**禁用 `--amend` 回填**） |
+| git blob hash（`git rev-parse HEAD:卡比集機器人.gs`） | `5bb0b1df0165faabe6081a270a4b261ef3e4b45e` |
+| sha256（LF 正規化） | `fb667cf3e469839be4d7e49be5c60937a3d3e0eb6d93e9abf2c3236ab3f452f9` |
+| 位元組數 / 行數 | `323287` / `4329` |
+
+> 上一版基準（v3.4.5，目前**線上實際跑的**）：部署 commit `a8d08f1`、`#版本` `95fde8a`、
+> blob `5244f11e4ee798c661137e51a49a761eb194fc65`、sha256 `1da17aa2…`、`318920` / `4278`。
+> 部署 v3.4.6 前，方法 A 打 `#版本` 應仍顯示 `95fde8a`；若顯示 `888a515` 代表已被部署，須回報。
 
 > 對照時以「當下 git HEAD 實算值」為準；上表是交付當時的快照，方便一眼確認。
 
