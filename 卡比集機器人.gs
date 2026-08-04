@@ -33,7 +33,7 @@ var ACCOUNT_METER = '營業支出-電費';       // ERP 日記帳預留會計科
 //    ❌ 絕不可用 git commit --amend 回填——amend 會改掉 commit hash，
 //       填進去的值當場失效，比不填更糟（永遠差一格且指向不存在的 commit）。
 var BOT_VERSION = 'v3.4.7';
-var BOT_BUILD = '888a515';
+var BOT_BUILD = '565b1c4';
 var BOT_DATE = '2026/08/05';
 function versionMessage() {
   return '📦 卡比集機器人 ' + BOT_VERSION + ' (' + BOT_BUILD + ') ' + BOT_DATE + '\n本輪重點修復：\n' +
