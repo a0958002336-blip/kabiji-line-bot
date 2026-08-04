@@ -32,11 +32,14 @@ var ACCOUNT_METER = '營業支出-電費';       // ERP 日記帳預留會計科
 //    這是刻意的：hash 標示的是「哪一版」，不是「最後一次提交」。
 //    ❌ 絕不可用 git commit --amend 回填——amend 會改掉 commit hash，
 //       填進去的值當場失效，比不填更糟（永遠差一格且指向不存在的 commit）。
-var BOT_VERSION = 'v3.4.6';
+var BOT_VERSION = 'v3.4.7';
 var BOT_BUILD = '888a515';
-var BOT_DATE = '2026/07/28';
+var BOT_DATE = '2026/08/05';
 function versionMessage() {
   return '📦 卡比集機器人 ' + BOT_VERSION + ' (' + BOT_BUILD + ') ' + BOT_DATE + '\n本輪重點修復：\n' +
+    '【v3.4.7 修】查出勤支援月份：查員工出勤 7月／本月／上月／2026/07（原本「7月」會被當成員工姓名比對→永遠查無紀錄）\n' +
+    '【v3.4.7 修】查出勤 2026/07 靜默壞掉：被 M/D 規則誤讀成 26/07＝26月7日；月份/日期超出範圍改為明確報錯，不再靜默回「沒有紀錄」\n' +
+    '【v3.4.7 顯示】查出勤超過 60 筆時明說「只顯示最近 60 筆」，避免把顯示截斷誤判成資料遺失\n' +
     '【v3.4.6 效能】knownShipCustomers／knownFreezerCustomers／rackNet 加入請求內快取——解決寄運資料累積後「每一行都重掃整張表」導致執行逾時、機器人全面停擺\n' +
     '【v3.4.6 防靜默】疑似鐵架收/出單但品名沒寫「鐵架」→ 明確回覆教學並記入輸入失敗紀錄,不再無聲吞掉\n' +
     '【v3.4.6 修】寄運客戶判定:裸動詞行(收／收回／出／出貨…)不得被當成客戶名\n' +
@@ -2544,7 +2547,10 @@ function commandSheet() {
     '・取消：客戶：清除(整筆)／客戶：品名 數量 取消(單項)／寄運資料 清除 確定(全部)',
     '・場外增改：寄運 客戶：品名 數量(新增/設定)／+N(增)／-N(減)／修改N／取消',
     '・注意：只記錄旭陽寄運，其他車行整筆不記', '',
-    '【出勤】', '・中控總覽（限老闆）', '・打卡：員工名＋上班／下班／遲到／請假', '・查員工出勤／查遲到／查請假／查上班／查下班', '・出勤統計／綜合評比（限老闆）', '・入職：員工名＋入職', '・借支：員工名＋借＋金額', '・外勤補貼：員工名＋出外勤＋地點', '',
+    '【出勤】', '・中控總覽（限老闆）', '・打卡：員工名＋上班／下班／遲到／請假',
+    '・查員工出勤／查遲到／查請假／查上班／查下班',
+    '　可加範圍：查出勤 7月／本月／上月／2026/07／7/1-7/15（超過 60 筆只顯示最近 60 筆）',
+    '・出勤統計／綜合評比（限老闆）', '・入職：員工名＋入職', '・借支：員工名＋借＋金額', '・外勤補貼：員工名＋出外勤＋地點', '',
     '【改價/損耗/匯款】', '・客戶 改價 內容', '・客戶 匯款 金額', '・對帳單貼上（扣除N件/改NNN元）', '・查改價　查損耗', '',
     '【群組權限（限老闆）】', '・#群組ID', '・#設為管理群組（這群可寫入）', '・#設為市場群組（這群唯讀）', '・#群組權限', '',
     '【設定】', '・#版本　#設定客戶 名稱　#查客戶', '・#貨主名單／#新增貨主 X', '・#冰庫名單／#新增冰庫 X', '・#安靜／#取消安靜（僅本群組）', '・#全部安靜／#全部取消安靜（全部群組・限老闆）', '・#開啟日期戳／#關閉日期戳／#日期戳狀態（計價單回當日日期・限老闆）', '',
@@ -3933,15 +3939,33 @@ function cancelFinance(text, chatId) {
 function attendanceQuery(actionFilter, arg) {
   arg = String(arg).trim();
   const data = getSheet(SHEET_ATTEND).getDataRange().getValues();
-  const dates = arg.match(/(?:\d{4}\/)?\d{1,2}\/\d{1,2}/g) || [];
+  // v3.4.7(B)：「2026/07」是年/月不是日期。不先擋掉的話，M/D 規則會從第3字元起
+  //   匹配到「26/07」→ parseYMD 算成 26月7日(20262607) → 永遠查無，且無任何錯誤提示。
+  const _argD = /^\d{4}\s*\/\s*\d{1,2}\s*$/.test(arg) ? '' : arg;
+  const dates = _argD.match(/(?:\d{4}\/)?\d{1,2}\/\d{1,2}/g) || [];
   let lo = null, hi = null, rangeLabel = '';
+  let ym = '';                                   // v3.4.7(主)：月份篩選（7月／本月／上月／2026/07）
   if (dates.length) {
+    // v3.4.7(B+)：月/日超出範圍 → 明確報錯。原本會算出不存在的日期然後靜默回「沒有紀錄」，
+    //   使用者無從得知是打錯格式還是真的沒資料（例：查出勤 26/07）。
+    const _bad = [dates[0], dates[1]].filter(Boolean).filter(function (s) {
+      const m = String(s).match(/(?:(\d{4})\/)?(\d{1,2})\/(\d{1,2})/);
+      return !m || +m[2] < 1 || +m[2] > 12 || +m[3] < 1 || +m[3] > 31;
+    });
+    if (_bad.length) return '⚠️ 日期看不懂：「' + _bad.join('、') + '」\n・單日：查出勤 7/16\n・區間：查出勤 7/1-7/15\n・整月：查出勤 7月（也可用 2026/07、本月、上月）';
     const a = parseYMD(dates[0]), b = parseYMD(dates[1] || dates[0]);
     lo = Math.min(a, b); hi = Math.max(a, b);
     rangeLabel = dates[0] + (dates[1] ? '-' + dates[1] : '');
+  } else {
+    // 只有在沒給 M/D 日期時才試月份。resolveYM('') 回 ''，
+    // 故「查出勤紀錄」不帶條件仍撈全部——刻意不比照 attendanceStats 的
+    // `resolveYM(arg) || thisYM()`，那會把既有行為從「全部」改成「只有本月」。
+    ym = resolveYM(arg);
+    if (ym) rangeLabel = ym;
   }
   let emp = arg;
   dates.forEach(function (d) { emp = emp.replace(d, ' '); });
+  if (ym) emp = emp.replace(/\d{4}\s*\/\s*\d{1,2}|\d{1,2}\s*月|上個?月|這個?月|本月|當月/g, ' ');   // v3.4.7：月份字樣不得殘留成員工名
   emp = emp.replace(/紀錄|記錄|查詢/g, ' ');
   emp = emp.replace(/[-~～至到]+/g, ' ').replace(/\s+/g, ' ').trim();
   const rows = [];
@@ -3950,13 +3974,16 @@ function attendanceQuery(actionFilter, arg) {
     if (actionFilter && act !== actionFilter) continue;
     if (emp && String(data[i][1]).indexOf(emp) === -1) continue;
     if (lo !== null) { const d = ymdNum(data[i][0]); if (!d || d < lo || d > hi) continue; }
+    else if (ym && ymOf(data[i][0]) !== ym) continue;                                   // v3.4.7 月份篩選
     const st = (data[i][3] && data[i][3] !== '正常') ? '（' + data[i][3] + '）' : '';
     rows.push('・' + fmtTime(data[i][0]) + '　' + (data[i][1] || '(未填)') + ' ' + act + st);
   }
   const title = actionFilter ? ('🕒 ' + actionFilter + '紀錄') : '🕒 員工出勤紀錄';
   const head = title + (emp ? '・' + emp : '') + (rangeLabel ? '（' + rangeLabel + '）' : '');
   if (rows.length === 0) return head + '：目前沒有紀錄。';
-  let out = head + '：\n' + rows.slice(-60).join('\n') + '\n――――――\n共 ' + rows.length + ' 筆';
+  const SHOWN = 60;                                                                     // v3.4.7(A)：顯示上限外顯
+  let out = head + '：\n' + rows.slice(-SHOWN).join('\n') + '\n――――――\n共 ' + rows.length + ' 筆';
+  if (rows.length > SHOWN) out += '（本則只顯示最近 ' + SHOWN + ' 筆；要看更早請加月份或日期，例：查出勤 7月／查出勤 7/1-7/15）';
   if (out.length > 4500) out = out.slice(0, 4500) + '\n…(太多了，只顯示一部分)';
   return out;
 }
