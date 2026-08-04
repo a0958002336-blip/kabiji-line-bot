@@ -8,16 +8,17 @@
 
 ## 方法 A：#版本 hash 核對（最快，非工程師 30 秒）
 
-每次交付都會把「本次部署 commit 的短 hash」寫進程式的 `BOT_BUILD`，並顯示在 `#版本` 第一行。
+每次交付都會把「本次**版本 commit** 的短 hash」寫進程式的 `BOT_BUILD`，並顯示在 `#版本` 第一行。
+（⚠️ 是版本 commit，不是部署 commit、不是 HEAD——見上方寫死定義。）
 
 1. 在 LINE（老闆帳號）打 `#版本`，看第一行：
    ```
-   📦 卡比集機器人 v3.4.5 (95fde8a) 2026/07/16
+   📦 卡比集機器人 v3.4.7 (565b1c4) 2026/08/05
    ```
    括號內就是**線上碼的 build hash**。
 2. 打開 git 最新的 `卡比集機器人.gs`（或 GitHub 上該檔），找到最上方：
    ```js
-   var BOT_BUILD = '95fde8a';
+   var BOT_BUILD = '565b1c4';
    ```
 3. **兩個 hash 一樣 → 一致 ✅**；**不一樣 → 兩邊分岔，見下方〈發現分岔怎麼辦〉**。
 
@@ -67,18 +68,37 @@ diff <(git show HEAD:卡比集機器人.gs) <(sed 's/\r$//' ~/Desktop/gas_online
 
 ## 目前基準（每次交付更新這一塊）
 
+### ⚠️ 先讀：`BOT_BUILD` 到底該對哪個 commit（寫死，勿再解讀）
+
+> **`#版本` 顯示的 hash ＝ 該版的「版本 commit」短 hash，不是 HEAD、不是 `chore(版本)` 回填後的 commit、
+> 也不是封版 commit。**
+>
+> 本版即為 **`565b1c4`**（`[v3.4.7] …`），**不是** `c3d2a34`（chore 回填）。
+> 交付流程固定四步：① 版本 commit（此時 BOT_BUILD 仍是上一版）→ ② 取該 commit 短 hash
+> → ③ 回填並另開 `chore(版本)` commit → ④ 封版 commit。
+> 所以 **BOT_BUILD 一定比 HEAD 少一到兩格，這是刻意的，不是忘了更新**。
+>
+> 做方法 A 核對時：拿 `#版本` 括號內的值 比對 **下表的「版本 commit」列**，
+> ❌ 不要拿 `git rev-parse --short HEAD` 比（一定對不上）。
+> ❌ 禁止用 `git commit --amend` 回填 hash（amend 會改掉 commit hash，填進去的值當場失效）。
+
 | 項目 | 值 |
 |------|-----|
-| 版本 | `v3.4.6`（2026/07/30 封版，**尚未部署**：LINE 平台 500/505 未解＋主車行名稱待確認） |
-| 部署 commit（.gs 最後變更） | `72b1b52` |
-| `#版本` 顯示 / `BOT_BUILD` | `888a515`（＝版本 commit；回填走獨立 `chore(版本)` commit，故恆為 HEAD 的父/祖，**禁用 `--amend` 回填**） |
-| git blob hash（`git rev-parse HEAD:卡比集機器人.gs`） | `5bb0b1df0165faabe6081a270a4b261ef3e4b45e` |
-| sha256（LF 正規化） | `fb667cf3e469839be4d7e49be5c60937a3d3e0eb6d93e9abf2c3236ab3f452f9` |
-| 位元組數 / 行數 | `323287` / `4329` |
+| 版本 | `v3.4.7`（2026/08/05 封版，**尚未部署**：主車行名稱待確認） |
+| **版本 commit（＝`#版本` 顯示 / `BOT_BUILD`）** | **`565b1c4`** ← 方法 A 對這個 |
+| 部署 commit（.gs 最後變更，即 chore 回填那筆） | `c3d2a34` |
+| git blob hash（`git rev-parse HEAD:卡比集機器人.gs`） | `ea310d0cbdc7490effb478d6048b163e0c2dfdda` |
+| sha256（LF 正規化） | `ffdcadf5275a7f714d428517a2e1af205f4b73c26fe4cdc5e90abfe43e10abd6` |
+| 位元組數 / 行數 | `325875` / `4356` |
+| 回歸測試 | 529/529 |
 
-> 上一版基準（v3.4.5，目前**線上實際跑的**）：部署 commit `a8d08f1`、`#版本` `95fde8a`、
-> blob `5244f11e4ee798c661137e51a49a761eb194fc65`、sha256 `1da17aa2…`、`318920` / `4278`。
-> 部署 v3.4.6 前，方法 A 打 `#版本` 應仍顯示 `95fde8a`；若顯示 `888a515` 代表已被部署，須回報。
+> **上一版基準（v3.4.6，目前線上實際跑的）**：版本 commit（`#版本`）`888a515`、
+> 部署 commit `72b1b52`、blob `5bb0b1df0165faabe6081a270a4b261ef3e4b45e`、
+> sha256 `fb667cf3e469839be4d7e49be5c60937a3d3e0eb6d93e9abf2c3236ab3f452f9`、`323287` / `4329`。
+>
+> 部署 v3.4.7 之前，方法 A 打 `#版本` 應顯示 **`888a515`**；
+> 若顯示 `565b1c4` 代表已被部署，須回報。
+> 再上一版 v3.4.5：`#版本` `95fde8a`、部署 commit `a8d08f1`、sha256 `1da17aa2…`、`318920` / `4278`。
 
 > 對照時以「當下 git HEAD 實算值」為準；上表是交付當時的快照，方便一眼確認。
 
