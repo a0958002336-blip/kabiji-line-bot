@@ -32,11 +32,12 @@ var ACCOUNT_METER = '營業支出-電費';       // ERP 日記帳預留會計科
 //    這是刻意的：hash 標示的是「哪一版」，不是「最後一次提交」。
 //    ❌ 絕不可用 git commit --amend 回填——amend 會改掉 commit hash，
 //       填進去的值當場失效，比不填更糟（永遠差一格且指向不存在的 commit）。
-var BOT_VERSION = 'v3.4.7';
+var BOT_VERSION = 'v3.4.8';
 var BOT_BUILD = '565b1c4';
-var BOT_DATE = '2026/08/05';
+var BOT_DATE = '2026/08/10';
 function versionMessage() {
   return '📦 卡比集機器人 ' + BOT_VERSION + ' (' + BOT_BUILD + ') ' + BOT_DATE + '\n本輪重點修復：\n' +
+    '【v3.4.8 新】#備份狀態（限老闆）：在 LINE 直接查每日備份有沒有在跑——觸發器在不在／最後成功時間＋檔名＋連結／最後失敗原因／清理提醒／失敗通知是否設定，不用再貼腳本進 GAS\n' +
     '【v3.4.7 修】查出勤支援月份：查員工出勤 7月／本月／上月／2026/07（原本「7月」會被當成員工姓名比對→永遠查無紀錄）\n' +
     '【v3.4.7 修】查出勤 2026/07 靜默壞掉：被 M/D 規則誤讀成 26/07＝26月7日；月份/日期超出範圍改為明確報錯，不再靜默回「沒有紀錄」\n' +
     '【v3.4.7 顯示】查出勤超過 60 筆時明說「只顯示最近 60 筆」，避免把顯示截斷誤判成資料遺失\n' +
@@ -149,6 +150,7 @@ function handleEvent(event) {
   if (/^#停用電錶/.test(text)) { if (!ownerGate(source, replyToken)) return; const n = text.replace(/^#停用電錶/, '').trim(); replyToLine(replyToken, n ? handleDisableMeter(n) : '⚠️ 用法：#停用電錶 錶名'); return; }
   if (/^#啟用電錶/.test(text)) { if (!ownerGate(source, replyToken)) return; const n = text.replace(/^#啟用電錶/, '').trim(); replyToLine(replyToken, n ? handleEnableMeter(n) : '⚠️ 用法：#啟用電錶 錶名'); return; }
   if (/^#電錶提醒/.test(text)) { replyToLine(replyToken, meterReminderStatus()); return; }
+  if (/^#備份狀態/.test(text)) { if (!ownerOnly(source, replyToken, '備份狀態')) return; replyToLine(replyToken, backupStatus()); return; }   // v3.4.8：唯讀，含備份檔連結故限老闆
   if (/^#抄錶/.test(text)) { if (!getPerm(chatId).canWrite) { replyToLine(replyToken, '🔒 此群組唯讀，無法抄錶。'); return; } replyToLine(replyToken, handleMeterReading(text, source && source.userId)); return; }
   if (/^#電費紀錄/.test(text)) { const b = text.replace(/^#電費紀錄/, '').trim(); const nm = (b.match(/^(\S+)/) || [])[1]; replyToLine(replyToken, nm ? handleMeterHistory(nm, b.slice(nm.length)) : '⚠️ 用法：#電費紀錄 錶名'); return; }
   if (/^#電錶\s+\S/.test(text)) { const nm = text.replace(/^#電錶/, '').trim().split(/\s+/)[0]; replyToLine(replyToken, handleMeterStatus(nm)); return; }
@@ -2556,10 +2558,11 @@ function commandSheet() {
     '【設定】', '・#版本　#設定客戶 名稱　#查客戶', '・#貨主名單／#新增貨主 X', '・#冰庫名單／#新增冰庫 X', '・#安靜／#取消安靜（僅本群組）', '・#全部安靜／#全部取消安靜（全部群組・限老闆）', '・#開啟日期戳／#關閉日期戳／#日期戳狀態（計價單回當日日期・限老闆）', '',
     '【電錶月結】', '・#新增電錶 錶名 倍率30 電價5 起始829 [出租方X]（限老闆）', '・#抄錶 錶名 本期讀數（回算式並記錄；讀數異常或同日重抄需加「確認」）', '・#電錶 錶名（查狀態）／#電費紀錄 錶名（查歷史）', '・#電錶設定 錶名 電價5.2／倍率30／出租方X（限老闆，只影響之後）', '・#停用電錶 錶名／#啟用電錶 錶名（限老闆）', '・#電錶提醒（查提醒設定＋本月抄錶狀態）　每月1號08:00提醒、每日20:00追未抄', '',
     '【備註】', '・#備註 內容（掛到今天最近一筆寄運或收款）', '・注意：其他 #開頭若非指令會提示「無此指令」，不會被當備註', '',
-    '【出問題時先查這三個（限老闆）】',
+    '【出問題時先查這幾個（限老闆）】',
     '・查輸入失敗／今日輸入失敗／查輸入失敗 7/1-7/10　←被擋下的輸入都在這',
     '・#台子異常掃描　←抓計價單被誤判成台子出庫',
-    '・#非旭陽寄運　←抓舊規則誤存的別家車行寄運', '',
+    '・#非旭陽寄運　←抓舊規則誤存的別家車行寄運',
+    '・#備份狀態　←每日備份有沒有在跑、最後成功是哪天', '',
     '【清除（限老闆，要加「確定」）】', '・出勤 清除 確定／冰庫 清除 確定／台子 清除 確定／寄運資料 清除 確定', '・改價紀錄 清除 確定／損耗紀錄 清除 確定／冰庫總量 清除 確定', '',
     '（打「指令表」或「#指令表」隨時叫出這張）'
   ].join('\n');
@@ -4111,11 +4114,17 @@ function dailyBackup() {
   let name;
   try {
     name = backupFileName(new Date());
-    SpreadsheetApp.openById(SHEET_ID).copy(name);   // 僅用既有試算表權限複製整份試算表（不碰 DriveApp）
+    const _cp = SpreadsheetApp.openById(SHEET_ID).copy(name);   // 僅用既有試算表權限複製整份試算表（不碰 DriveApp）
+    // v3.4.8：把「這次備份做了什麼」記進 Script Property，供 #備份狀態 查詢。
+    //   刻意不掃 Drive 檔案清單（那需要 DriveApp → 新增 OAuth scope → 全專案重新授權，
+    //   會破壞本模組「零新增權限」的前提）。copy() 回傳的新檔物件可直接取 ID，成本為零。
+    let _fid = ''; try { _fid = (_cp && _cp.getId) ? String(_cp.getId()) : ''; } catch (e2) { }
+    try { PROPS.setProperty('BACKUP_LAST_OK', nowStr() + '|' + name + '|' + _fid); } catch (e3) { }
     Logger.log('✅ dailyBackup 完成：已複製整份試算表為「' + name + '」（我的雲端硬碟根目錄）。');
   } catch (e) {
     const msg = (e && e.message) || e;
     Logger.log('❌ dailyBackup 失敗：' + msg);
+    try { PROPS.setProperty('BACKUP_LAST_ERR', nowStr() + '|' + String(msg)); } catch (e4) { }   // v3.4.8：供 #備份狀態 顯示
     try { notifyOwner('⚠️ 今日試算表備份失敗：' + msg + '\n請檢查試算表是否存在／雲端空間是否足夠（手冊：docs/備份與還原手冊.md）。'); } catch (err) { }
     return { ok: false, error: String(msg) };
   }
@@ -4130,6 +4139,33 @@ function dailyBackup() {
     }
   } catch (err) { Logger.log('清理提醒發送失敗（不影響備份）：' + err); }
   return { ok: true, name: name, reminded: reminded };
+}
+
+/* v3.4.8：#備份狀態 —— 在 LINE 直接看得到備份到底有沒有在跑，不用每次貼腳本進 GAS。
+ * 唯讀：只讀觸發器清單與 Script Property，不建立/不刪除觸發器、不改設定、不碰試算表。
+ * ⚠️ 侷限（刻意）：報的是「機器人最後一次做了什麼」，不是「Drive 現在真的有幾份」。
+ *   若有人手動刪了備份檔，這裡仍顯示成功——但附上的連結點下去 404，一秒即可驗出。
+ *   要真的掃 Drive 需 DriveApp → 新增 OAuth scope → 全專案重新授權，取捨後不做。 */
+function backupStatus() {
+  let trigN = 0;
+  try { ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'dailyBackup') trigN++; }); } catch (e) { }
+  const ok = PROPS.getProperty('BACKUP_LAST_OK');
+  const err = PROPS.getProperty('BACKUP_LAST_ERR');
+  const rem = PROPS.getProperty('BACKUP_CLEAN_REMINDER');
+  const owner = PROPS.getProperty('OWNER_USER_ID');
+  let out = '🗂️ 備份狀態\n';
+  out += '・觸發器 dailyBackup：' + (trigN === 0 ? '❌ 未建立 → 請於 GAS 執行 setupBackupTrigger 一次' : (trigN === 1 ? '✅ 已建立（每日約 23:30）' : '⚠️ 重複建立 ' + trigN + ' 個，請於 GAS 觸發條件頁刪到剩 1 個')) + '\n';
+  if (ok) {
+    const p = String(ok).split('|');
+    out += '・最後成功：' + (p[0] || '') + '\n　檔名 ' + (p[1] || '(未記錄)');
+    if (p[2]) out += '\n　https://docs.google.com/spreadsheets/d/' + p[2];
+    out += '\n';
+  } else out += '・最後成功：（無紀錄，可能從未成功執行過）\n';
+  out += '・最後失敗：' + (err ? String(err).split('|').join('　') : '（無）') + '\n';
+  out += '・每週清理提醒：' + (rem ? '上次發送 ' + rem : '（尚未發送過）') + '\n';
+  out += '・失敗通知：' + (owner ? '✅ 已設定老闆，備份失敗會通知你' : '❌ 未設定老闆 → 備份失敗你不會收到通知（請打 #註冊老闆）') + '\n';
+  out += '――――――\n備份的是「試算表資料」，程式碼備份靠 git/GitHub，兩者不同。';
+  return out;
 }
 
 // 手動執行一次即可：建立每日備份觸發器（約 23:30，避開整點尖峰）。已存在同 handler 則不重複建立。

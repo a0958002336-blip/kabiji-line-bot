@@ -79,6 +79,7 @@ const EXPORT_NAMES = [
   // ---- 每日試算表備份（DriveApp/ScriptApp；純邏輯可測，實際 Drive 操作以 mock 驗證）----
   'dailyBackup',
   'setupBackupTrigger',
+  'backupStatus',
   'backupFileName',
   'isBackupFileName',
   'shouldRemindCleanup',
